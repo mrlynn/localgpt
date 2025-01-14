@@ -2,7 +2,7 @@
 
 A modern chat interface for Ollama, featuring a clean UI with project management capabilities, dark mode support, and markdown rendering.
 
-![Screenshot showing the chat interface](images/screenshot1.png.png)
+![Screenshot showing the chat interface](images/screenshot1.png)
 
 ## Features
 
