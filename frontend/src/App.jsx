@@ -8,6 +8,8 @@ import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Sidebar } from "./components/Sidebar";
 import { ProjectDialog } from "./components/projects/ProjectDialog";
+import { Menu } from "./components/Menu";
+import { ModelSelector } from "./components/ModelSelector";
 
 import {
   Dialog,
@@ -50,6 +52,7 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [showProjectDialog, setShowProjectDialog] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const [editingProject, setEditingProject] = useState(null);
@@ -130,6 +133,10 @@ function App() {
     await fetchChats();
   };
 
+  const handleModelChange = (model) => {
+    setSelectedModel(model);
+  };
+
   const handleProjectSettingsUpdate = async (updatedProject) => {
     try {
       // Refresh the projects list
@@ -189,7 +196,7 @@ function App() {
 
     try {
       // Add user message immediately
-      setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+      setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
       const response = await fetch("http://localhost:3000/api/chat", {
         method: "POST",
@@ -198,7 +205,10 @@ function App() {
           "X-Session-ID": activeChat || "",
           ...(activeProject && { "X-Project-ID": activeProject._id }),
         },
-        body: JSON.stringify({ message: userMessage }),
+        body: JSON.stringify({ 
+          message: userMessage,
+          model: selectedModel 
+        }),
       });
 
       if (!response.ok) {
@@ -206,7 +216,7 @@ function App() {
       }
 
       // Create a new message for the assistant's response
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -216,10 +226,10 @@ function App() {
         if (done) break;
 
         const chunk = decoder.decode(value);
-        const lines = chunk.split("\n").filter(line => line.trim());
+        const lines = chunk.split("\n").filter((line) => line.trim());
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
+          if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(5));
 
@@ -229,7 +239,7 @@ function App() {
 
               if (data.chunk) {
                 // Update the last message with the new chunk
-                setMessages(prev => {
+                setMessages((prev) => {
                   const newMessages = [...prev];
                   const lastMessage = newMessages[newMessages.length - 1];
                   lastMessage.content += data.chunk;
@@ -243,7 +253,7 @@ function App() {
                 break;
               }
             } catch (e) {
-              console.error('Error parsing SSE data:', e);
+              console.error("Error parsing SSE data:", e);
             }
           }
         }
@@ -289,27 +299,30 @@ function App() {
     try {
       if (projectData._id) {
         // Update existing project
-        const response = await fetch(`http://localhost:3000/api/projects/${projectData._id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(projectData),
-        });
-  
+        const response = await fetch(
+          `http://localhost:3000/api/projects/${projectData._id}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(projectData),
+          }
+        );
+
         if (response.ok) {
           await fetchProjects();
         }
       } else {
         // Create new project
-        const response = await fetch('http://localhost:3000/api/projects', {
-          method: 'POST',
+        const response = await fetch("http://localhost:3000/api/projects", {
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
           body: JSON.stringify(projectData),
         });
-  
+
         if (response.ok) {
           const newProject = await response.json();
           await fetchProjects();
@@ -317,7 +330,7 @@ function App() {
         }
       }
     } catch (error) {
-      console.error('Error saving project:', error);
+      console.error("Error saving project:", error);
     }
   };
 
@@ -338,32 +351,89 @@ function App() {
     }
   };
 
+  const handleDeleteProject = async (projectId) => {
+    if (
+      !confirm(
+        "Are you sure you want to delete this project? This will also delete all associated chats."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/projects/${projectId}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setProjects(projects.filter((p) => p._id !== projectId));
+        if (activeProject?._id === projectId) {
+          setActiveProject(null);
+          setActiveChat(null);
+          setMessages([]);
+        }
+      }
+    } catch (error) {
+      console.error("Error deleting project:", error);
+    }
+  };
+
+  const handleDeleteChat = async (sessionId) => {
+    if (!confirm("Are you sure you want to delete this chat?")) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/sessions/${sessionId}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setChats(chats.filter((chat) => chat.sessionId !== sessionId));
+        if (activeChat === sessionId) {
+          setActiveChat(null);
+          setMessages([]);
+        }
+      }
+    } catch (error) {
+      console.error("Error deleting chat:", error);
+    }
+  };
+
   return (
     <div className="flex min-h-screen max-h-screen bg-background">
       <div className="w-80 flex-shrink-0">
         <div className="flex flex-col h-full">
-        <Sidebar
-  chats={chats}
-  activeChat={activeChat}
-  onChatSelect={setActiveChat}
-  onNewChat={handleNewChat}
-  projects={projects}
-  activeProject={activeProject}
-  onProjectSelect={setActiveProject}
-  onProjectSubmit={handleProjectSubmit}
-/>
+          <Sidebar
+            chats={chats}
+            activeChat={activeChat}
+            onChatSelect={setActiveChat}
+            onDeleteChat={handleDeleteChat}
+            onNewChat={handleNewChat}
+            projects={projects}
+            activeProject={activeProject}
+            onProjectSelect={setActiveProject}
+            onDeleteProject={handleDeleteProject}
+            onProjectSubmit={handleProjectSubmit}
+          />
         </div>
       </div>
 
       <main className="flex-1 flex flex-col min-w-[600px] max-w-[1200px]">
         <div className="border-b">
           <div className="flex items-center justify-between p-4">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-6 h-6" />
-              <h1 className="text-xl font-bold">
-                {activeProject ? activeProject.name : "LocalGPT Chat"}
-              </h1>
-            </div>
+            <div className="flex items-center gap-4">
+              <Menu onNewChat={handleNewChat} />
+              <ModelSelector onModelChange={setSelectedModel} />
+              </div>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"

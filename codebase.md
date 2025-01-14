@@ -74,25 +74,29 @@ const messageSchema = new mongoose.Schema({
 });
 
 const chatSchema = new mongoose.Schema({
-  sessionId: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  title: {
-    type: String,
-    default: 'New conversation'
-  },
-  messages: [messageSchema],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+    sessionId: {
+        type: String,
+        required: true,
+        unique: true
+      },
+      projectId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Project'
+      },
+    title: {
+      type: String,
+      default: 'New conversation'
+    },
+    messages: [messageSchema],
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
+    }
+  });
 
 // Add debug logging to the pre-save middleware
 chatSchema.pre('save', async function(next) {
@@ -117,6 +121,215 @@ chatSchema.post('save', function(error, doc, next) {
 });
 
 export const Chat = mongoose.model('Chat', chatSchema);
+```
+
+# backend/models/Project.js
+
+```js
+// /backend/models/Project.js
+import mongoose from 'mongoose';
+
+const projectSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  description: {
+    type: String,
+    trim: true
+  },
+  // Enhanced configuration for prompt control
+  config: {
+    // Base system prompt for all interactions in this project
+    systemPrompt: {
+      type: String,
+      default: ""
+    },
+    // Style and tone settings
+    style: {
+      tone: {
+        type: String,
+        enum: ['formal', 'technical', 'casual', 'friendly'],
+        default: 'formal'
+      },
+      languageLevel: {
+        type: String,
+        enum: ['beginner', 'intermediate', 'expert'],
+        default: 'intermediate'
+      },
+      codeStyle: {
+        type: String,
+        enum: ['descriptive', 'concise', 'documented'],
+        default: 'documented'
+      }
+    },
+    // Context window configuration
+    context: {
+      includeProjectDescription: {
+        type: Boolean,
+        default: true
+      },
+      maxPreviousMessages: {
+        type: Number,
+        default: 5
+      },
+      includeInsights: {
+        type: Boolean,
+        default: true
+      }
+    },
+    // Knowledge base configuration
+    knowledgeBase: {
+      // Key terms and their definitions
+      terminology: [{
+        term: String,
+        definition: String,
+        aliases: [String]
+      }],
+      // Reference documents
+      references: [{
+        title: String,
+        content: String,
+        type: {
+          type: String,
+          enum: ['documentation', 'code', 'requirements', 'guidelines']
+        },
+        priority: {
+          type: Number,
+          default: 1
+        }
+      }],
+      // Code snippets or examples
+      codeExamples: [{
+        title: String,
+        code: String,
+        language: String,
+        description: String
+      }]
+    },
+    // Project-specific requirements or constraints
+    requirements: {
+      // Mandatory elements that must be included
+      mandatoryElements: [{
+        type: String,
+        description: String
+      }],
+      // Elements to avoid or exclude
+      restrictions: [{
+        type: String,
+        description: String
+      }],
+      // Specific frameworks or technologies to use
+      technologies: [{
+        name: String,
+        version: String,
+        required: Boolean
+      }]
+    },
+    // Output formatting preferences
+    outputPreferences: {
+      format: {
+        type: String,
+        enum: ['markdown', 'plain', 'structured'],
+        default: 'markdown'
+      },
+      includeExamples: {
+        type: Boolean,
+        default: true
+      },
+      codeBlockStyle: {
+        type: String,
+        enum: ['minimal', 'documented', 'verbose'],
+        default: 'documented'
+      }
+    }
+  },
+  // Track important insights and decisions
+  insights: [{
+    content: String,
+    date: {
+      type: Date,
+      default: Date.now
+    },
+    source: String,
+    type: {
+      type: String,
+      enum: ['automatic', 'manual', 'decision'],
+      default: 'automatic'
+    },
+    tags: [String]
+  }],
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Pre-save middleware to update timestamps
+projectSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
+
+export const Project = mongoose.model('Project', projectSchema);
+
+// Helper function to build context string from project configuration
+export const buildProjectContext = (project) => {
+  const contextParts = [];
+
+  // Add base information if configured
+  if (project.config.context.includeProjectDescription && project.description) {
+    contextParts.push(`Project Description: ${project.description}`);
+  }
+
+  // Add style guidance
+  const { style } = project.config;
+  if (style) {
+    contextParts.push(`Style Guide:
+- Tone: ${style.tone}
+- Technical Level: ${style.languageLevel}
+- Code Style: ${style.codeStyle}`);
+  }
+
+  // Add relevant terminology
+  const terms = project.config.knowledgeBase.terminology;
+  if (terms && terms.length > 0) {
+    contextParts.push(`Key Terms:
+${terms.map(t => `- ${t.term}: ${t.definition}`).join('\n')}`);
+  }
+
+  // Add mandatory requirements
+  const mandatory = project.config.requirements.mandatoryElements;
+  if (mandatory && mandatory.length > 0) {
+    contextParts.push(`Requirements:
+${mandatory.map(r => `- ${r.description}`).join('\n')}`);
+  }
+
+  // Add restrictions
+  const restrictions = project.config.requirements.restrictions;
+  if (restrictions && restrictions.length > 0) {
+    contextParts.push(`Restrictions:
+${restrictions.map(r => `- ${r.description}`).join('\n')}`);
+  }
+
+  // Add recent insights if configured
+  if (project.config.context.includeInsights && project.insights?.length > 0) {
+    const recentInsights = project.insights
+      .sort((a, b) => b.date - a.date)
+      .slice(0, 3)
+      .map(i => `- ${i.content}`)
+      .join('\n');
+    
+    contextParts.push(`Recent Insights:\n${recentInsights}`);
+  }
+
+  return contextParts.join('\n\n');
+};
 ```
 
 # backend/package.json
@@ -149,186 +362,397 @@ export const Chat = mongoose.model('Chat', chatSchema);
 
 ```js
 // /backend/server.js
-import express from 'express';
-import cors from 'cors';
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import { v4 as uuidv4 } from 'uuid';
-import { Chat } from './models/Chat.js';  // Make sure we import Chat model
+import express from "express";
+import cors from "cors";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+import { v4 as uuidv4 } from "uuid";
+import { Chat } from "./models/Chat.js"; // Make sure we import Chat model
+import ProjectService from './services/projectService.js';
+import { Project } from './models/Project.js';  // Add this line
 
 // Load environment variables before anything else
 dotenv.config();
-import ChatService from './services/chatService.js';  // Import the class, not the instance
+import ChatService from "./services/chatService.js"; // Import the class, not the instance
 const chatService = new ChatService({
+  mongodbUri: process.env.MONGODB_URI,
+  mongodbName: process.env.MONGODB_DB_NAME,
+});
+
+const projectService = new ProjectService({
     mongodbUri: process.env.MONGODB_URI,
     mongodbName: process.env.MONGODB_DB_NAME
-});
+  });
+
 const app = express();
 const port = process.env.PORT || 3000;
-const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434';
-const modelName = process.env.MODEL_NAME || 'deepseek-coder:6.7b';
+const ollamaHost = process.env.OLLAMA_HOST || "http://localhost:11434";
+const modelName = process.env.MODEL_NAME || "deepseek-coder:6.7b";
 
 app.use(cors());
 app.use(express.json());
 
 // MongoDB Connection (if configured)
 if (process.env.MONGODB_URI) {
-    console.log('Attempting to connect to MongoDB...');
-    
-    mongoose.set('debug', true);
-    
-    mongoose.connect(process.env.MONGODB_URI, {
-      dbName: process.env.MONGODB_DB_NAME || 'deepseek-chat',
+  console.log("Attempting to connect to MongoDB...");
+
+  mongoose.set("debug", true);
+
+  mongoose
+    .connect(process.env.MONGODB_URI, {
+      dbName: process.env.MONGODB_DB_NAME || "deepseek-chat",
       retryWrites: true,
-      w: 'majority'
+      w: "majority",
     })
     .then(async () => {
-      console.log('MongoDB connected successfully');
-      console.log('Database:', process.env.MONGODB_DB_NAME || 'deepseek-chat');
-      
+      console.log("MongoDB connected successfully");
+      console.log("Database:", process.env.MONGODB_DB_NAME || "deepseek-chat");
+
       // Test the connection with explicit error handling
       try {
         const testDoc = await new Chat({
-          sessionId: 'test-connection',
-          title: 'Test Connection',
-          messages: []
+          sessionId: "test-connection",
+          title: "Test Connection",
+          messages: [],
         }).save();
-        
-        console.log('Successfully created test document:', testDoc._id);
-        await Chat.deleteOne({ sessionId: 'test-connection' });
-        console.log('Successfully cleaned up test document');
+
+        console.log("Successfully created test document:", testDoc._id);
+        await Chat.deleteOne({ sessionId: "test-connection" });
+        console.log("Successfully cleaned up test document");
       } catch (error) {
-        console.error('Error during connection test:', error);
-        console.error('Full error:', JSON.stringify(error, null, 2));
+        console.error("Error during connection test:", error);
+        console.error("Full error:", JSON.stringify(error, null, 2));
       }
     })
     .catch((err) => {
-      console.error('MongoDB connection error:', err);
-      console.error('Full connection error:', JSON.stringify(err, null, 2));
-      console.error('Stack trace:', err.stack);
+      console.error("MongoDB connection error:", err);
+      console.error("Full connection error:", JSON.stringify(err, null, 2));
+      console.error("Stack trace:", err.stack);
     });
-  } else {
-    console.warn('WARNING: MONGODB_URI not found in environment variables. Running with in-memory storage.');
-  }
+} else {
+  console.warn(
+    "WARNING: MONGODB_URI not found in environment variables. Running with in-memory storage."
+  );
+}
 
 // Middleware to ensure session ID
 app.use((req, res, next) => {
-  req.sessionId = req.headers['x-session-id'] || uuidv4();
-  res.setHeader('X-Session-ID', req.sessionId);
+  req.sessionId = req.headers["x-session-id"] || uuidv4();
+  res.setHeader("X-Session-ID", req.sessionId);
   next();
 });
 
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { message } = req.body;
-    const { sessionId } = req;
-    
-    // Check if Ollama is running first
+app.post("/api/chat", async (req, res) => {
     try {
-      const healthCheck = await fetch(`${ollamaHost}/api/version`);
-      if (!healthCheck.ok) {
-        throw new Error('Ollama service is not responding');
+      const { message } = req.body;
+      const { sessionId } = req;
+      const projectId = req.headers['x-project-id'];
+  
+      // Check if Ollama is running first
+      try {
+        const healthCheck = await fetch(`${ollamaHost}/api/version`);
+        if (!healthCheck.ok) {
+          throw new Error("Ollama service is not responding");
+        }
+      } catch (error) {
+        console.error("Ollama health check failed:", error);
+        throw new Error("Ollama is not running. Please start Ollama with `ollama serve`");
       }
+  
+      // Set headers for SSE
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+  
+      let fullResponse = "";
+      let contextualPrompt = message;
+      let systemInstructions = [];
+  
+      // If within a project, build enhanced context
+      if (projectId) {
+        try {
+          // Update chat with project association
+          await Chat.findOneAndUpdate(
+            { sessionId },
+            { projectId },
+            { upsert: true }
+          );
+  
+          // Get project details
+          const project = await Project.findById(projectId);
+          if (project) {
+            // Build base project context
+            const contextParts = [
+              `Project: ${project.name}`,
+              project.description ? `Description: ${project.description}` : null,
+            ].filter(Boolean);
+  
+            // Add style guidance if configured
+            if (project.config?.style) {
+              systemInstructions.push(
+                `Use a ${project.config.style.tone} tone and assume ${project.config.style.languageLevel} technical level.`,
+                `Write code in a ${project.config.style.codeStyle} style.`
+              );
+            }
+  
+            // Add terminology if available
+            if (project.config?.knowledgeBase?.terminology?.length > 0) {
+              contextParts.push(
+                "Project Terminology:",
+                ...project.config.knowledgeBase.terminology
+                  .map(t => `- ${t.term}: ${t.definition}`)
+              );
+            }
+  
+            // Add relevant code examples based on the query
+            if (project.config?.knowledgeBase?.codeExamples) {
+              const relevantExamples = project.config.knowledgeBase.codeExamples
+                .filter(example => 
+                  example.title.toLowerCase().includes(message.toLowerCase()) ||
+                  example.description.toLowerCase().includes(message.toLowerCase())
+                )
+                .slice(0, 2);  // Limit to 2 most relevant examples
+  
+              if (relevantExamples.length > 0) {
+                contextParts.push(
+                  "Relevant Code Examples:",
+                  ...relevantExamples.map(ex => (
+                    `${ex.title}:\n\`\`\`${ex.language}\n${ex.code}\n\`\`\`\n${ex.description}`
+                  ))
+                );
+              }
+            }
+  
+            // Add project requirements if configured
+            if (project.config?.requirements) {
+              const { requirements } = project.config;
+              
+              if (requirements.mandatoryElements?.length > 0) {
+                systemInstructions.push(
+                  "Required elements:",
+                  ...requirements.mandatoryElements.map(r => `- ${r.description}`)
+                );
+              }
+  
+              if (requirements.restrictions?.length > 0) {
+                systemInstructions.push(
+                  "Restrictions:",
+                  ...requirements.restrictions.map(r => `- ${r.description}`)
+                );
+              }
+  
+              if (requirements.technologies?.length > 0) {
+                const requiredTech = requirements.technologies
+                  .filter(t => t.required)
+                  .map(t => `${t.name}${t.version ? ` v${t.version}` : ''}`);
+                
+                if (requiredTech.length > 0) {
+                  systemInstructions.push(
+                    `Use the following technologies: ${requiredTech.join(', ')}`
+                  );
+                }
+              }
+            }
+  
+            // Add output preferences if configured
+            if (project.config?.outputPreferences) {
+              const { outputPreferences } = project.config;
+              systemInstructions.push(
+                `Format output in ${outputPreferences.format} style.`,
+                outputPreferences.includeExamples ? 'Include practical examples when relevant.' : 'Focus on concise explanations.',
+                `Provide code blocks in ${outputPreferences.codeBlockStyle} style.`
+              );
+            }
+  
+            // Add recent insights if configured and available
+            if (project.config?.context?.includeInsights && project.insights?.length > 0) {
+              const recentInsights = project.insights
+                .sort((a, b) => b.date - a.date)
+                .slice(0, 3)
+                .map(i => `- ${i.content}`)
+                .join('\n');
+              
+              contextParts.push("Recent Project Insights:", recentInsights);
+            }
+  
+            // Build the final contextual prompt
+            contextualPrompt = [
+              "[Project Context]",
+              contextParts.join('\n'),
+              "",
+              "[User Query]",
+              message
+            ].join('\n');
+          }
+        } catch (error) {
+          console.error("Error building project context:", error);
+          // Continue with original message if project context fails
+          contextualPrompt = message;
+        }
+      }
+  
+      // Prepare messages array with system instructions if available
+      const messagesArray = [...(await chatService.getMessages(sessionId))];
+      
+      if (systemInstructions.length > 0) {
+        messagesArray.unshift({
+          role: "system",
+          content: systemInstructions.join('\n')
+        });
+      }
+  
+      messagesArray.push({
+        role: "user",
+        content: contextualPrompt
+      });
+  
+      const response = await fetch(`${ollamaHost}/api/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: messagesArray,
+          stream: true,
+        }),
+      });
+  
+      if (!response.ok) {
+        throw new Error(`Ollama responded with status ${response.status}`);
+      }
+  
+      // Create a readable stream from the response
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+  
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+  
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n").filter((line) => line.trim());
+  
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line);
+            if (data.message?.content) {
+              fullResponse += data.message.content;
+              // Send the chunk to the client
+              res.write(`data: ${JSON.stringify({ chunk: data.message.content })}\n\n`);
+            }
+          } catch (e) {
+            console.error("Error parsing JSON:", e);
+          }
+        }
+      }
+  
+      // Save the complete conversation to the database
+      await chatService.addMessages(sessionId, message, fullResponse);
+  
+      // Automated insight detection for project chats
+      if (projectId && fullResponse.length > 0) {
+        try {
+          // Enhanced insight detection with more sophisticated patterns
+          const insightPatterns = [
+            { pattern: /important to note|key insight|crucial finding|significantly/i, weight: 1 },
+            { pattern: /best practice|recommended approach|common pitfall/i, weight: 1.2 },
+            { pattern: /must remember|critical consideration|essential factor/i, weight: 1.5 },
+            { pattern: /discovered that|realized that|found that|concluded that/i, weight: 0.8 }
+          ];
+  
+          let insightScore = 0;
+          for (const { pattern, weight } of insightPatterns) {
+            if (pattern.test(fullResponse)) {
+              insightScore += weight;
+            }
+          }
+  
+          // If the cumulative score exceeds threshold, save as insight
+          if (insightScore >= 1.5) {
+            const insightContent = fullResponse.length > 500 
+              ? fullResponse.substring(0, 500) + '...' // Truncate long insights
+              : fullResponse;
+  
+            await Project.findByIdAndUpdate(projectId, {
+              $push: {
+                insights: {
+                  content: insightContent,
+                  date: new Date(),
+                  source: sessionId,
+                  type: 'automatic',
+                  tags: ['auto-detected']
+                }
+              }
+            });
+          }
+        } catch (error) {
+          console.error("Error saving project insight:", error);
+          // Don't fail the response if insight saving fails
+        }
+      }
+  
+      // Send the end message
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
     } catch (error) {
-      console.error('Ollama health check failed:', error);
-      throw new Error('Ollama is not running. Please start Ollama with `ollama serve`');
+      console.error("Error:", error);
+      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.end();
     }
-
-    console.log('Sending request to Ollama...');
-    console.log('Message:', message);
-    
-    const response = await fetch(`${ollamaHost}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: modelName,
-        messages: [
-          ...(await chatService.getMessages(sessionId)),
-          { role: 'user', content: message }
-        ],
-        stream: false
-      }),
-    });
-    
-    console.log('Ollama response status:', response.status);
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Ollama error response:', errorText);
-      throw new Error(`Ollama responded with status ${response.status}: ${errorText}`);
-    }
-
-    const data = await response.json();
-    
-    // Add the exchange to chat history
-    await chatService.addMessages(sessionId, message, data.message.content);
-
-    // Get updated messages
-    const messages = await chatService.getMessages(sessionId);
-
-    res.json({ 
-      response: data.message.content,
-      history: messages,
-      sessionId
-    });
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to process chat request', 
-      details: error.message 
-    });
-  }
-});
+  });
 
 // Get chat history endpoint
-app.get('/api/history/:sessionId?', async (req, res) => {
+app.get("/api/history/:sessionId?", async (req, res) => {
   try {
     const sessionId = req.params.sessionId || req.sessionId;
     const messages = await chatService.getMessages(sessionId);
     res.json({ messages, sessionId });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch chat history' });
+    res.status(500).json({ error: "Failed to fetch chat history" });
   }
 });
 
 // Clear chat history endpoint
-app.post('/api/clear/:sessionId?', async (req, res) => {
+app.post("/api/clear/:sessionId?", async (req, res) => {
   try {
     const sessionId = req.params.sessionId || req.sessionId;
     await chatService.clearChat(sessionId);
-    res.json({ message: 'Chat history cleared', sessionId });
+    res.json({ message: "Chat history cleared", sessionId });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to clear chat history' });
+    res.status(500).json({ error: "Failed to clear chat history" });
   }
 });
 
 // Get all chat sessions
-app.get('/api/sessions', async (req, res) => {
+app.get("/api/sessions", async (req, res) => {
   try {
     const sessions = await chatService.getAllSessions();
     res.json({ sessions });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sessions' });
+    res.status(500).json({ error: "Failed to fetch sessions" });
   }
 });
 
 // Debug endpoint to check MongoDB contents
-app.get('/api/debug/chats', async (req, res) => {
+app.get("/api/debug/chats", async (req, res) => {
   try {
     if (!process.env.MONGODB_URI) {
-      return res.json({ error: 'MongoDB not configured', inMemoryChats: chatService.inMemoryChats });
+      return res.json({
+        error: "MongoDB not configured",
+        inMemoryChats: chatService.inMemoryChats,
+      });
     }
     const chats = await Chat.find({});
     res.json({
       totalChats: chats.length,
-      chats: chats.map(chat => ({
+      chats: chats.map((chat) => ({
         sessionId: chat.sessionId,
         title: chat.title,
         messageCount: chat.messages.length,
         createdAt: chat.createdAt,
-        updatedAt: chat.updatedAt
-      }))
+        updatedAt: chat.updatedAt,
+      })),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -336,29 +760,153 @@ app.get('/api/debug/chats', async (req, res) => {
 });
 
 // Test endpoint for Ollama connectivity
-app.get('/api/test-ollama', async (req, res) => {
+app.get("/api/test-ollama", async (req, res) => {
   try {
     const response = await fetch(`${ollamaHost}/api/version`);
     const data = await response.json();
-    res.json({ 
-      status: 'ok', 
+    res.json({
+      status: "ok",
       version: data.version,
-      storage: process.env.MONGODB_URI ? 'mongodb' : 'in-memory'
+      storage: process.env.MONGODB_URI ? "mongodb" : "in-memory",
     });
   } catch (error) {
-    console.error('Ollama test failed:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Could not connect to Ollama',
-      error: error.message 
+    console.error("Ollama test failed:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Could not connect to Ollama",
+      error: error.message,
     });
   }
 });
 
+app.post('/api/projects', async (req, res) => {
+    try {
+      const { name, description } = req.body;
+      const project = new Project({ name, description });
+      await project.save();
+      res.json(project);
+    } catch (error) {
+      console.error('Error creating project:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/projects', async (req, res) => {
+    try {
+      const projects = await Project.find().sort({ updatedAt: -1 });
+      res.json(projects);
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/projects/:projectId', async (req, res) => {
+    try {
+      const project = await Project.findById(req.params.projectId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      res.json(project);
+    } catch (error) {
+      console.error('Error fetching project:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/projects/:projectId', async (req, res) => {
+    try {
+      const project = await Project.findByIdAndUpdate(
+        req.params.projectId,
+        { ...req.body, updatedAt: new Date() },
+        { new: true }
+      );
+      res.json(project);
+    } catch (error) {
+      console.error('Error updating project:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/projects/:projectId/config', async (req, res) => {
+    try {
+      const project = await Project.findById(req.params.projectId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      
+      project.config = {
+        ...project.config,
+        ...req.body
+      };
+      await project.save();
+      res.json(project);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.post('/api/projects/:projectId/insights', async (req, res) => {
+    try {
+      const { content } = req.body;
+      const project = await Project.findById(req.params.projectId);
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      
+      project.insights.push({
+        content,
+        date: new Date(),
+        source: req.body.source || 'manual'
+      });
+      await project.save();
+      res.json(project);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/projects/:projectId', async (req, res) => {
+    try {
+      await Project.findByIdAndDelete(req.params.projectId);
+      // Also delete associated chats
+      await Chat.deleteMany({ projectId: req.params.projectId });
+      res.json({ message: 'Project deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting project:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/sessions/:sessionId', async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      await Chat.deleteOne({ sessionId });
+      res.json({ message: 'Chat deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.get('/api/projects/:projectId/chats', async (req, res) => {
+    try {
+      const chats = await Chat.find({ projectId: req.params.projectId })
+        .sort({ updatedAt: -1 });
+      res.json({ sessions: chats }); // Match the format expected by frontend
+    } catch (error) {
+      console.error('Error fetching project chats:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
-  console.log(`Storage mode: ${process.env.MONGODB_URI ? 'MongoDB' : 'In-Memory'}`);
+  console.log(
+    `Storage mode: ${process.env.MONGODB_URI ? "MongoDB" : "In-Memory"}`
+  );
 });
+
 ```
 
 # backend/services/chatService.js
@@ -369,7 +917,7 @@ import { Chat } from "../models/Chat.js";
 import { v4 as uuidv4 } from "uuid";
 
 class ChatService {
-    constructor(config = {}) {
+  constructor(config = {}) {
     this.inMemoryChats = new Map();
 
     this.isMongoDBEnabled = !!(config.mongodbUri || process.env.MONGODB_URI);
@@ -432,70 +980,32 @@ class ChatService {
     }
   }
 
-  async addMessages(sessionId, userMessage, assistantMessage) {
-    console.log("Adding messages for session:", sessionId);
-    const messages = [
-      { role: "user", content: userMessage, timestamp: new Date() },
-      { role: "assistant", content: assistantMessage, timestamp: new Date() },
-    ];
-
-    if (this.isMongoDBEnabled) {
-      try {
-        console.log("MongoDB is enabled, attempting to save messages...");
+  async addMessages(sessionId, userMessage, assistantMessage, projectId = null) {
+    try {
+      if (this.isMongoDBEnabled) {
         let chat = await Chat.findOne({ sessionId });
-
+        
         if (!chat) {
-          console.log("No existing chat found, creating new document");
           chat = new Chat({
             sessionId,
             messages: [],
-            title:
-              userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : ""),
+            title: userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : ""),
+            projectId // Add project ID if available
           });
-
-          // Add validation check
-          const validationError = chat.validateSync();
-          if (validationError) {
-            console.error("Validation error:", validationError);
-            throw validationError;
-          }
-
-          console.log(
-            "Created new chat document:",
-            JSON.stringify(chat.toJSON(), null, 2)
-          );
-        } else {
-          console.log("Found existing chat document");
         }
-
-        console.log("Adding new messages to chat");
-        chat.messages.push(...messages);
-        chat.updatedAt = new Date();
-
-        try {
-          const savedChat = await chat.save();
-          console.log("Successfully saved chat. Document ID:", savedChat._id);
-          console.log("New message count:", savedChat.messages.length);
-          return savedChat.messages;
-        } catch (saveError) {
-          console.error("Error during save operation:", saveError);
-          if (saveError.code === 11000) {
-            console.error("Duplicate key error - sessionId already exists");
-          }
-          throw saveError;
-        }
-      } catch (error) {
-        console.error("Error saving messages to MongoDB:", error);
-        console.error("Full error object:", JSON.stringify(error, null, 2));
-        console.error("Error stack:", error.stack);
-        throw error;
+        
+        chat.messages.push(
+          { role: "user", content: userMessage },
+          { role: "assistant", content: assistantMessage }
+        );
+        
+        return await chat.save();
+      } else {
+        // Existing in-memory logic
       }
-    } else {
-      if (!this.inMemoryChats.has(sessionId)) {
-        this.inMemoryChats.set(sessionId, []);
-      }
-      this.inMemoryChats.get(sessionId).push(...messages);
-      return this.inMemoryChats.get(sessionId);
+    } catch (error) {
+      console.error("Error adding messages:", error);
+      throw error;
     }
   }
 
@@ -553,6 +1063,69 @@ class ChatService {
 
 export default ChatService;
 
+```
+
+# backend/services/projectService.js
+
+```js
+class ProjectService {
+    constructor(config = {}) {
+      this.isMongoDBEnabled = !!(config.mongodbUri || process.env.MONGODB_URI);
+    }
+  
+    async createProject(name, description = '') {
+      if (!this.isMongoDBEnabled) {
+        throw new Error('MongoDB is required for project support');
+      }
+  
+      const project = new Project({
+        name,
+        description
+      });
+  
+      return await project.save();
+    }
+  
+    async getAllProjects() {
+      if (!this.isMongoDBEnabled) {
+        throw new Error('MongoDB is required for project support');
+      }
+  
+      return await Project.find().sort({ updatedAt: -1 });
+    }
+  
+    async getProject(projectId) {
+      if (!this.isMongoDBEnabled) {
+        throw new Error('MongoDB is required for project support');
+      }
+  
+      return await Project.findById(projectId);
+    }
+  
+    async updateProject(projectId, updates) {
+      if (!this.isMongoDBEnabled) {
+        throw new Error('MongoDB is required for project support');
+      }
+  
+      return await Project.findByIdAndUpdate(
+        projectId,
+        { ...updates, updatedAt: new Date() },
+        { new: true }
+      );
+    }
+  
+    async deleteProject(projectId) {
+      if (!this.isMongoDBEnabled) {
+        throw new Error('MongoDB is required for project support');
+      }
+  
+      // Delete the project and all associated chats
+      await Chat.deleteMany({ projectId });
+      return await Project.findByIdAndDelete(projectId);
+    }
+  }
+  
+  export default ProjectService;
 ```
 
 # frontend/components.json
@@ -819,21 +1392,25 @@ logs
 
 ```jsx
 // /frontend/src/App.jsx
-import { useState, useEffect, useRef } from 'react';
-import ChatMessage from './components/ChatMessage';
+import { useState, useEffect, useRef } from "react";
+import ChatMessage from "./components/ChatMessage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Sidebar } from './components/Sidebar';
+import { Sidebar } from "./components/Sidebar";
+import { ProjectDialog } from "./components/projects/ProjectDialog";
+import { Menu } from "./components/Menu";
+import { ModelSelector } from "./components/ModelSelector";
+
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {    
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -852,25 +1429,35 @@ import {
   MessageSquare,
   Moon,
   Sun,
+  FolderPlus,
 } from "lucide-react";
-import EnvironmentCheck from './components/EnvironmentCheck';
+import EnvironmentCheck from "./components/EnvironmentCheck";
 
 function App() {
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [copySuccess, setCopySuccess] = useState(null);
   const [chats, setChats] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
   const [showEnvCheck, setShowEnvCheck] = useState(false);
+  const [projects, setProjects] = useState([]);
+  const [activeProject, setActiveProject] = useState(null);
+  const [showProjectDialog, setShowProjectDialog] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const [editingProject, setEditingProject] = useState(null);
+
+  // Load projects
+  useEffect(() => {
+    fetchProjects();
+  }, []);
 
   // Load chat sessions
   useEffect(() => {
     fetchChats();
-  }, []);
+  }, [activeProject]); // Refetch chats when active project changes
 
   // Load messages when active chat changes
   useEffect(() => {
@@ -879,45 +1466,103 @@ function App() {
     }
   }, [activeChat]);
 
-  const fetchChats = async () => {
+  const fetchProjects = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/sessions');
+      const response = await fetch("http://localhost:3000/api/projects");
       if (response.ok) {
         const data = await response.json();
-        setChats(data.sessions);
+        setProjects(data);
+        // If we have an active project, refresh its data
+        if (activeProject) {
+          const updatedProject = data.find((p) => p._id === activeProject._id);
+          if (updatedProject) {
+            setActiveProject(updatedProject);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching projects:", error);
+    }
+  };
+
+  const fetchChats = async () => {
+    try {
+      let url = "http://localhost:3000/api/sessions";
+      if (activeProject) {
+        url = `http://localhost:3000/api/projects/${activeProject._id}/chats`;
+      }
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        setChats(data.sessions || data);
         // Set first chat as active if none selected
-        if (!activeChat && data.sessions.length > 0) {
+        if (!activeChat && data.sessions?.length > 0) {
           setActiveChat(data.sessions[0].sessionId);
         }
       }
     } catch (error) {
-      console.error('Error fetching chats:', error);
+      console.error("Error fetching chats:", error);
     }
   };
 
   const fetchMessages = async (sessionId) => {
     try {
-      const response = await fetch(`http://localhost:3000/api/history/${sessionId}`);
+      const response = await fetch(
+        `http://localhost:3000/api/history/${sessionId}`
+      );
       if (response.ok) {
         const data = await response.json();
         setMessages(data.messages);
       }
     } catch (error) {
-      console.error('Error fetching messages:', error);
+      console.error("Error fetching messages:", error);
     }
   };
 
   const handleNewChat = async () => {
     setActiveChat(null);
     setMessages([]);
-    await fetchChats(); // Refresh chat list
+    await fetchChats();
+  };
+
+  const handleProjectSettingsUpdate = async (updatedProject) => {
+    try {
+      // Refresh the projects list
+      await fetchProjects();
+      // Update active project if it's the one that was modified
+      if (activeProject?._id === updatedProject._id) {
+        setActiveProject(updatedProject);
+      }
+    } catch (error) {
+      console.error("Error updating project settings:", error);
+    }
+  };
+
+  const handleCreateProject = async (projectData) => {
+    try {
+      const response = await fetch("http://localhost:3000/api/projects", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(projectData),
+      });
+
+      if (response.ok) {
+        const newProject = await response.json();
+        // Refresh projects list
+        await fetchProjects();
+      }
+    } catch (error) {
+      console.error("Error creating project:", error);
+    }
   };
 
   useEffect(() => {
     if (isDarkMode) {
-      document.documentElement.classList.add('dark');
+      document.documentElement.classList.add("dark");
     } else {
-      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.remove("dark");
     }
   }, [isDarkMode]);
 
@@ -935,33 +1580,77 @@ function App() {
 
     setIsLoading(true);
     const userMessage = input.trim();
-    setInput('');
+    setInput("");
 
     try {
-      const response = await fetch('http://localhost:3000/api/chat', {
-        method: 'POST',
+      // Add user message immediately
+      setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+
+      const response = await fetch("http://localhost:3000/api/chat", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'X-Session-ID': activeChat || ''
+          "Content-Type": "application/json",
+          "X-Session-ID": activeChat || "",
+          ...(activeProject && { "X-Project-ID": activeProject._id }),
         },
         body: JSON.stringify({ message: userMessage }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        throw new Error("Failed to get response");
       }
 
-      const data = await response.json();
-      setMessages(data.history);
-      if (!activeChat) {
-        setActiveChat(data.sessionId);
-        await fetchChats(); // Refresh chat list
+      // Create a new message for the assistant's response
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n").filter((line) => line.trim());
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(5));
+
+              if (data.error) {
+                throw new Error(data.error);
+              }
+
+              if (data.chunk) {
+                // Update the last message with the new chunk
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  const lastMessage = newMessages[newMessages.length - 1];
+                  lastMessage.content += data.chunk;
+                  return newMessages;
+                });
+              }
+
+              if (data.done) {
+                // The stream is complete
+                await fetchChats(); // Refresh chat list
+                break;
+              }
+            } catch (e) {
+              console.error("Error parsing SSE data:", e);
+            }
+          }
+        }
       }
     } catch (error) {
-      console.error('Error:', error);
-      setMessages(prev => [...prev, 
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }
+      console.error("Error:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Sorry, I encountered an error. Please try again.",
+        },
       ]);
     } finally {
       setIsLoading(false);
@@ -971,11 +1660,13 @@ function App() {
 
   const clearChat = async () => {
     try {
-      await fetch(`http://localhost:3000/api/clear/${activeChat || ''}`, { method: 'POST' });
+      await fetch(`http://localhost:3000/api/clear/${activeChat || ""}`, {
+        method: "POST",
+      });
       setMessages([]);
-      await fetchChats(); // Refresh chat list
+      await fetchChats();
     } catch (error) {
-      console.error('Error clearing chat:', error);
+      console.error("Error clearing chat:", error);
     }
   };
 
@@ -985,40 +1676,148 @@ function App() {
       setCopySuccess(content);
       setTimeout(() => setCopySuccess(null), 2000);
     } catch (err) {
-      console.error('Failed to copy:', err);
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  const handleProjectSubmit = async (projectData) => {
+    try {
+      if (projectData._id) {
+        // Update existing project
+        const response = await fetch(
+          `http://localhost:3000/api/projects/${projectData._id}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(projectData),
+          }
+        );
+
+        if (response.ok) {
+          await fetchProjects();
+        }
+      } else {
+        // Create new project
+        const response = await fetch("http://localhost:3000/api/projects", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(projectData),
+        });
+
+        if (response.ok) {
+          const newProject = await response.json();
+          await fetchProjects();
+          setActiveProject(newProject); // Automatically select the new project
+        }
+      }
+    } catch (error) {
+      console.error("Error saving project:", error);
     }
   };
 
   const regenerateLastResponse = async () => {
     if (messages.length < 2) return;
-    
-    const lastUserMessage = [...messages].reverse()
-      .find(msg => msg.role === 'user')?.content;
-      
+
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((msg) => msg.role === "user")?.content;
+
     if (lastUserMessage) {
       setInput(lastUserMessage);
       setMessages(messages.slice(0, -2));
-      setTimeout(() => handleSubmit({ preventDefault: () => {}, target: null }), 0);
+      setTimeout(
+        () => handleSubmit({ preventDefault: () => {}, target: null }),
+        0
+      );
+    }
+  };
+
+  const handleDeleteProject = async (projectId) => {
+    if (
+      !confirm(
+        "Are you sure you want to delete this project? This will also delete all associated chats."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/projects/${projectId}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setProjects(projects.filter((p) => p._id !== projectId));
+        if (activeProject?._id === projectId) {
+          setActiveProject(null);
+          setActiveChat(null);
+          setMessages([]);
+        }
+      }
+    } catch (error) {
+      console.error("Error deleting project:", error);
+    }
+  };
+
+  const handleDeleteChat = async (sessionId) => {
+    if (!confirm("Are you sure you want to delete this chat?")) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/sessions/${sessionId}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setChats(chats.filter((chat) => chat.sessionId !== sessionId));
+        if (activeChat === sessionId) {
+          setActiveChat(null);
+          setMessages([]);
+        }
+      }
+    } catch (error) {
+      console.error("Error deleting chat:", error);
     }
   };
 
   return (
     <div className="flex min-h-screen max-h-screen bg-background">
       <div className="w-80 flex-shrink-0">
-        <Sidebar 
-          chats={chats}
-          activeChat={activeChat}
-          onChatSelect={setActiveChat}
-          onNewChat={handleNewChat}
-        />
+        <div className="flex flex-col h-full">
+          <Sidebar
+            chats={chats}
+            activeChat={activeChat}
+            onChatSelect={setActiveChat}
+            onDeleteChat={handleDeleteChat}
+            onNewChat={handleNewChat}
+            projects={projects}
+            activeProject={activeProject}
+            onProjectSelect={setActiveProject}
+            onDeleteProject={handleDeleteProject}
+            onProjectSubmit={handleProjectSubmit}
+          />
+        </div>
       </div>
 
       <main className="flex-1 flex flex-col min-w-[600px] max-w-[1200px]">
         <div className="border-b">
           <div className="flex items-center justify-between p-4">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-6 h-6" />
-              <h1 className="text-xl font-bold">DeepSeek Chat</h1>
+            <div className="flex items-center gap-4">
+              <Menu onNewChat={handleNewChat} />
+              <ModelSelector />
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -1034,13 +1833,16 @@ function App() {
                 size="icon"
                 onClick={() => setIsDarkMode(!isDarkMode)}
               >
-                {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                {isDarkMode ? (
+                  <Sun className="w-5 h-5" />
+                ) : (
+                  <Moon className="w-5 h-5" />
+                )}
               </Button>
             </div>
           </div>
         </div>
 
-        {/* Environment Check Dialog */}
         <Dialog open={showEnvCheck} onOpenChange={setShowEnvCheck}>
           <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
@@ -1050,17 +1852,98 @@ function App() {
           </DialogContent>
         </Dialog>
 
-        {/* Rest of your existing JSX remains the same */}
+        <ProjectDialog
+          open={showProjectDialog}
+          onOpenChange={setShowProjectDialog}
+          project={editingProject} // Pass project for editing, null for new
+          onSubmit={handleCreateProject}
+        />
+
         <div className="flex-1 overflow-hidden">
           <Card className="h-full border-0">
             <ScrollArea className="h-[calc(100vh-200px)]">
-              {/* ... rest of the existing chat UI code ... */}
+              <div className="flex flex-col gap-4 p-4">
+                {messages.map((message, index) => (
+                  <div
+                    key={index}
+                    className={`flex gap-2 ${
+                      message.role === "assistant"
+                        ? "justify-start"
+                        : "justify-end"
+                    }`}
+                  >
+                    {message.role === "assistant" && (
+                      <div className="relative flex flex-col w-full max-w-[85%] gap-2">
+                        <div className="flex items-start gap-2 group">
+                          <div className="bg-muted rounded-lg p-3">
+                            <ChatMessage
+                              message={message.content}
+                              isDarkMode={isDarkMode}
+                            />
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={() => copyMessage(message.content)}
+                          >
+                            {copySuccess === message.content ? (
+                              <CheckCircle2 className="w-4 h-4" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {message.role === "user" && (
+                      <div className="bg-primary text-primary-foreground rounded-lg p-3 max-w-[85%]">
+                        {message.content}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
             </ScrollArea>
           </Card>
         </div>
 
-        <div className="p-4">
-          {/* ... rest of the existing input UI code ... */}
+        <div className="p-4 border-t">
+          <div className="flex gap-2">
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={messages.length === 0}
+                onClick={clearChat}
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={messages.length === 0}
+                onClick={regenerateLastResponse}
+              >
+                <RotateCcw className="w-4 h-4" />
+              </Button>
+            </div>
+            <form onSubmit={handleSubmit} className="flex flex-1 gap-2">
+              <Input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Type a message..."
+                disabled={isLoading}
+                className="flex-1"
+              />
+              <Button type="submit" disabled={isLoading}>
+                <Send className="w-4 h-4 mr-2" />
+                Send
+              </Button>
+            </form>
+          </div>
         </div>
       </main>
     </div>
@@ -1068,6 +1951,7 @@ function App() {
 }
 
 export default App;
+
 ```
 
 # frontend/src/assets/react.svg
@@ -1359,52 +2243,1775 @@ const EnvironmentCheck = () => {
 export default EnvironmentCheck;
 ```
 
+# frontend/src/components/Menu.jsx
+
+```jsx
+// /frontend/src/components/Menu.jsx
+import React from 'react';
+import { Button } from "@/components/ui/button";
+import { MenuIcon, Plus, ChevronDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+export function Menu({ onNewChat }) {
+  return (
+    <div className="fixed top-4 left-4 z-50 md:hidden">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon">
+            <MenuIcon className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuItem onClick={onNewChat}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Chat
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+```
+
+# frontend/src/components/ModelSelector.jsx
+
+```jsx
+// /frontend/src/components/ModelSelector.jsx
+import React from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const models = [
+  {
+    name: "Local GPT",
+    description: "Powered by Ollama - Optimized for chat and coding",
+    value: "deepseek-coder:6.7b",
+  }
+];
+
+export function ModelSelector() {
+  return (
+    <Select defaultValue={models[0].value}>
+      <SelectTrigger className="w-[200px] bg-background">
+        <SelectValue placeholder="Select a model" />
+      </SelectTrigger>
+      <SelectContent>
+        {models.map((model) => (
+          <SelectItem key={model.value} value={model.value}>
+            <div className="flex flex-col">
+              <span>{model.name}</span>
+              <span className="text-xs text-muted-foreground">{model.description}</span>
+            </div>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+```
+
+# frontend/src/components/projects/index.jsx
+
+```jsx
+import React from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Folder, FolderPlus, Settings } from "lucide-react";
+
+// Project Creation/Edit Dialog
+export function ProjectDialog({ 
+  open, 
+  onOpenChange, 
+  project = null, 
+  onSubmit 
+}) {
+  const [name, setName] = React.useState(project?.name || '');
+  const [description, setDescription] = React.useState(project?.description || '');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit({ name, description });
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {project ? 'Edit Project' : 'Create New Project'}
+          </DialogTitle>
+          <DialogDescription>
+            {project 
+              ? 'Update your project details' 
+              : 'Create a new project to organize your conversations'}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <Label htmlFor="name">Project Name</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter project name"
+              required
+            />
+          </div>
+          <div>
+            <Label htmlFor="description">Description</Label>
+            <Textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Enter project description"
+              rows={3}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="submit">
+              {project ? 'Update Project' : 'Create Project'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Project Sidebar Section
+export function ProjectSection({ 
+  projects, 
+  activeProject, 
+  onProjectSelect,
+  onNewProject 
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between px-4 py-2">
+        <div className="flex items-center gap-2">
+          <Folder className="w-4 h-4" />
+          <span className="text-sm font-semibold">Projects</span>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onNewProject}
+          title="New Project"
+        >
+          <FolderPlus className="w-4 h-4" />
+        </Button>
+      </div>
+      <div className="space-y-1">
+      {projects.map((project) => (
+  <div key={project._id} className="relative">
+    <Button
+      variant={activeProject?._id === project._id ? "secondary" : "ghost"}
+      className="w-full justify-start gap-2 text-left"
+      onClick={() => onProjectSelect(project)}
+    >
+      <div className="flex flex-col flex-1 min-w-0">
+        <span className="truncate">{project.name}</span>
+        {project.description && (
+          <span className="text-xs text-muted-foreground truncate">
+            {project.description}
+          </span>
+        )}
+      </div>
+    </Button>
+    {activeProject?._id === project._id && (
+      <ProjectSettingsButton 
+        project={project} 
+        onSettingsUpdated={fetchProjects} 
+      />
+    )}
+  </div>
+))}
+      </div>
+    </div>
+  );
+}
+
+export default function ProjectManager() {
+  const [projects, setProjects] = React.useState([]);
+  const [activeProject, setActiveProject] = React.useState(null);
+  const [showProjectDialog, setShowProjectDialog] = React.useState(false);
+  const [editingProject, setEditingProject] = React.useState(null);
+
+  React.useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const fetchProjects = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/projects');
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(data);
+      }
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+    }
+  };
+
+  const handleCreateProject = async (projectData) => {
+    try {
+      const response = await fetch('http://localhost:3000/api/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(projectData),
+      });
+
+      if (response.ok) {
+        const newProject = await response.json();
+        setProjects([...projects, newProject]);
+      }
+    } catch (error) {
+      console.error('Error creating project:', error);
+    }
+  };
+
+  const handleUpdateProject = async (projectData) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/projects/${editingProject._id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(projectData),
+      });
+
+      if (response.ok) {
+        const updatedProject = await response.json();
+        setProjects(projects.map(p => 
+          p._id === updatedProject._id ? updatedProject : p
+        ));
+        if (activeProject?._id === updatedProject._id) {
+          setActiveProject(updatedProject);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating project:', error);
+    }
+  };
+
+  const handleDeleteProject = async (projectId) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/projects/${projectId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setProjects(projects.filter(p => p._id !== projectId));
+        if (activeProject?._id === projectId) {
+          setActiveProject(null);
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting project:', error);
+    }
+  };
+
+  return (
+    <>
+      <ProjectSection
+        projects={projects}
+        activeProject={activeProject}
+        onProjectSelect={setActiveProject}
+        onNewProject={() => {
+          setEditingProject(null);
+          setShowProjectDialog(true);
+        }}
+      />
+
+      <ProjectDialog
+        open={showProjectDialog}
+        onOpenChange={setShowProjectDialog}
+        project={editingProject}
+        onSubmit={editingProject ? handleUpdateProject : handleCreateProject}
+      />
+    </>
+  );
+}
+```
+
+# frontend/src/components/projects/OutputTab.jsx
+
+```jsx
+export function OutputTab({ settings, setSettings }) {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <Label>Output Format</Label>
+          <Select
+            value={settings.outputPreferences.format}
+            onValueChange={(value) => 
+              setSettings(prev => ({
+                ...prev,
+                outputPreferences: {
+                  ...prev.outputPreferences,
+                  format: value
+                }
+              }))
+            }
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select format" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="markdown">Markdown</SelectItem>
+              <SelectItem value="plain">Plain Text</SelectItem>
+              <SelectItem value="structured">Structured</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+  
+        <div className="space-y-2">
+          <Label>Code Block Style</Label>
+          <Select
+            value={settings.outputPreferences.codeBlockStyle}
+            onValueChange={(value) => 
+              setSettings(prev => ({
+                ...prev,
+                outputPreferences: {
+                  ...prev.outputPreferences,
+                  codeBlockStyle: value
+                }
+              }))
+            }
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select style" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="minimal">Minimal</SelectItem>
+              <SelectItem value="documented">Documented</SelectItem>
+              <SelectItem value="verbose">Verbose</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+  
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="includeExamples"
+            checked={settings.outputPreferences.includeExamples}
+            onCheckedChange={(checked) =>
+              setSettings(prev => ({
+                ...prev,
+                outputPreferences: {
+                  ...prev.outputPreferences,
+                  includeExamples: checked
+                }
+              }))
+            }
+          />
+          <Label htmlFor="includeExamples">Include examples in responses</Label>
+        </div>
+      </div>
+    );
+  }
+```
+
+# frontend/src/components/projects/ProjectDialog.jsx
+
+```jsx
+// /frontend/src/components/projects/ProjectDialog.jsx
+import React from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Save } from "lucide-react";
+
+export function ProjectDialog({ open, onOpenChange, project = null, onSubmit }) {
+  const [formData, setFormData] = React.useState({
+    name: '',
+    description: '',
+    config: {
+      style: {
+        tone: 'formal',
+        languageLevel: 'intermediate',
+        codeStyle: 'documented'
+      },
+      context: {
+        includeProjectDescription: true,
+        maxPreviousMessages: 5,
+        includeInsights: true
+      },
+      outputPreferences: {
+        format: 'markdown',
+        includeExamples: true,
+        codeBlockStyle: 'documented'
+      },
+      knowledgeBase: {
+        terminology: [],
+        codeExamples: []
+      },
+      requirements: {
+        mandatoryElements: [],
+        technologies: []
+      }
+    }
+  });
+
+  React.useEffect(() => {
+    if (project) {
+      setFormData({
+        name: project.name,
+        description: project.description || '',
+        config: project.config || formData.config
+      });
+    } else {
+      // Reset form when creating new project
+      setFormData({
+        name: '',
+        description: '',
+        config: {
+          style: {
+            tone: 'formal',
+            languageLevel: 'intermediate',
+            codeStyle: 'documented'
+          },
+          context: {
+            includeProjectDescription: true,
+            maxPreviousMessages: 5,
+            includeInsights: true
+          },
+          outputPreferences: {
+            format: 'markdown',
+            includeExamples: true,
+            codeBlockStyle: 'documented'
+          },
+          knowledgeBase: {
+            terminology: [],
+            codeExamples: []
+          },
+          requirements: {
+            mandatoryElements: [],
+            technologies: []
+          }
+        }
+      });
+    }
+  }, [project, open]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit(formData);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            {project ? 'Edit Project' : 'Create New Project'}
+          </DialogTitle>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <Tabs defaultValue="basic" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="basic">Basic Info</TabsTrigger>
+              <TabsTrigger value="style">Style & Context</TabsTrigger>
+              <TabsTrigger value="output">Output Settings</TabsTrigger>
+            </TabsList>
+
+            {/* Basic Info Tab */}
+            <TabsContent value="basic" className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Project Name</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    name: e.target.value
+                  }))}
+                  placeholder="Enter project name"
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="description">Description</Label>
+                <Textarea
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    description: e.target.value
+                  }))}
+                  placeholder="Enter project description"
+                  rows={3}
+                />
+              </div>
+            </TabsContent>
+
+            {/* Style & Context Tab */}
+            <TabsContent value="style" className="space-y-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Communication Style</Label>
+                  <Select
+                    value={formData.config.style.tone}
+                    onValueChange={(value) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        style: {
+                          ...prev.config.style,
+                          tone: value
+                        }
+                      }
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select tone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="formal">Formal</SelectItem>
+                      <SelectItem value="technical">Technical</SelectItem>
+                      <SelectItem value="casual">Casual</SelectItem>
+                      <SelectItem value="friendly">Friendly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Technical Level</Label>
+                  <Select
+                    value={formData.config.style.languageLevel}
+                    onValueChange={(value) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        style: {
+                          ...prev.config.style,
+                          languageLevel: value
+                        }
+                      }
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select level" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="beginner">Beginner</SelectItem>
+                      <SelectItem value="intermediate">Intermediate</SelectItem>
+                      <SelectItem value="expert">Expert</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Code Style</Label>
+                  <Select
+                    value={formData.config.style.codeStyle}
+                    onValueChange={(value) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        style: {
+                          ...prev.config.style,
+                          codeStyle: value
+                        }
+                      }
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select code style" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="descriptive">Descriptive</SelectItem>
+                      <SelectItem value="concise">Concise</SelectItem>
+                      <SelectItem value="documented">Documented</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="includeDescription"
+                    checked={formData.config.context.includeProjectDescription}
+                    onCheckedChange={(checked) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        context: {
+                          ...prev.config.context,
+                          includeProjectDescription: checked
+                        }
+                      }
+                    }))}
+                  />
+                  <Label htmlFor="includeDescription">Include project description in context</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="includeInsights"
+                    checked={formData.config.context.includeInsights}
+                    onCheckedChange={(checked) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        context: {
+                          ...prev.config.context,
+                          includeInsights: checked
+                        }
+                      }
+                    }))}
+                  />
+                  <Label htmlFor="includeInsights">Include insights in context</Label>
+                </div>
+              </div>
+            </TabsContent>
+
+            {/* Output Settings Tab */}
+            <TabsContent value="output" className="space-y-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Output Format</Label>
+                  <Select
+                    value={formData.config.outputPreferences.format}
+                    onValueChange={(value) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        outputPreferences: {
+                          ...prev.config.outputPreferences,
+                          format: value
+                        }
+                      }
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select format" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="markdown">Markdown</SelectItem>
+                      <SelectItem value="plain">Plain Text</SelectItem>
+                      <SelectItem value="structured">Structured</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Code Block Style</Label>
+                  <Select
+                    value={formData.config.outputPreferences.codeBlockStyle}
+                    onValueChange={(value) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        outputPreferences: {
+                          ...prev.config.outputPreferences,
+                          codeBlockStyle: value
+                        }
+                      }
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select style" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="minimal">Minimal</SelectItem>
+                      <SelectItem value="documented">Documented</SelectItem>
+                      <SelectItem value="verbose">Verbose</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="includeExamples"
+                    checked={formData.config.outputPreferences.includeExamples}
+                    onCheckedChange={(checked) => setFormData(prev => ({
+                      ...prev,
+                      config: {
+                        ...prev.config,
+                        outputPreferences: {
+                          ...prev.config.outputPreferences,
+                          includeExamples: checked
+                        }
+                      }
+                    }))}
+                  />
+                  <Label htmlFor="includeExamples">Include examples in responses</Label>
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">
+              <Save className="h-4 w-4 mr-2" />
+              {project ? 'Update Project' : 'Create Project'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/projects/ProjectSettings.jsx
+
+```jsx
+// /frontend/src/components/projects/ProjectSettings.jsx
+import React from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Plus, Trash2, Save, Settings } from "lucide-react";
+
+export function ProjectSettings({ open, onOpenChange, project, onSave }) {
+  const [settings, setSettings] = React.useState({
+    style: {
+      tone: 'formal',
+      languageLevel: 'intermediate',
+      codeStyle: 'documented'
+    },
+    context: {
+      includeProjectDescription: true,
+      maxPreviousMessages: 5,
+      includeInsights: true
+    },
+    knowledgeBase: {
+      terminology: [],
+      references: [],
+      codeExamples: []
+    },
+    requirements: {
+      mandatoryElements: [],
+      restrictions: [],
+      technologies: []
+    },
+    outputPreferences: {
+      format: 'markdown',
+      includeExamples: true,
+      codeBlockStyle: 'documented'
+    }
+  });
+
+  React.useEffect(() => {
+    if (project?.config) {
+      setSettings(project.config);
+    }
+  }, [project]);
+
+  const handleSave = async () => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/projects/${project._id}/config`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+      });
+
+      if (response.ok) {
+        const updatedProject = await response.json();
+        onSave?.(updatedProject);
+        onOpenChange(false);
+      }
+    } catch (error) {
+      console.error('Error saving project settings:', error);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Project Settings: {project?.name}</DialogTitle>
+        </DialogHeader>
+        
+        <Tabs defaultValue="style" className="w-full">
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="style">Style</TabsTrigger>
+            <TabsTrigger value="context">Context</TabsTrigger>
+            <TabsTrigger value="knowledge">Knowledge Base</TabsTrigger>
+            <TabsTrigger value="requirements">Requirements</TabsTrigger>
+            <TabsTrigger value="output">Output</TabsTrigger>
+          </TabsList>
+
+          {/* Style Tab */}
+          <TabsContent value="style" className="space-y-4">
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label>Conversation Tone</Label>
+                <Select 
+                  value={settings.style.tone}
+                  onValueChange={(value) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      style: { ...prev.style, tone: value }
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select tone" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="formal">Formal</SelectItem>
+                    <SelectItem value="technical">Technical</SelectItem>
+                    <SelectItem value="casual">Casual</SelectItem>
+                    <SelectItem value="friendly">Friendly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Technical Level</Label>
+                <Select 
+                  value={settings.style.languageLevel}
+                  onValueChange={(value) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      style: { ...prev.style, languageLevel: value }
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="beginner">Beginner</SelectItem>
+                    <SelectItem value="intermediate">Intermediate</SelectItem>
+                    <SelectItem value="expert">Expert</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Code Style</Label>
+                <Select 
+                  value={settings.style.codeStyle}
+                  onValueChange={(value) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      style: { ...prev.style, codeStyle: value }
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select code style" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="descriptive">Descriptive</SelectItem>
+                    <SelectItem value="concise">Concise</SelectItem>
+                    <SelectItem value="documented">Documented</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Context Tab */}
+          <TabsContent value="context" className="space-y-4">
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="includeDescription"
+                  checked={settings.context.includeProjectDescription}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      context: {
+                        ...prev.context,
+                        includeProjectDescription: checked
+                      }
+                    }))
+                  }
+                />
+                <Label htmlFor="includeDescription">Include project description in context</Label>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="includeInsights"
+                  checked={settings.context.includeInsights}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      context: {
+                        ...prev.context,
+                        includeInsights: checked
+                      }
+                    }))
+                  }
+                />
+                <Label htmlFor="includeInsights">Include recent insights in context</Label>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Previous Messages to Include</Label>
+                <Select
+                  value={settings.context.maxPreviousMessages.toString()}
+                  onValueChange={(value) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      context: {
+                        ...prev.context,
+                        maxPreviousMessages: parseInt(value)
+                      }
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select number of messages" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">None</SelectItem>
+                    <SelectItem value="3">Last 3</SelectItem>
+                    <SelectItem value="5">Last 5</SelectItem>
+                    <SelectItem value="10">Last 10</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Knowledge Base Tab */}
+          <TabsContent value="knowledge" className="space-y-4">
+            <div className="space-y-4">
+              {/* Terminology Section */}
+              <div>
+                <Label className="text-lg font-semibold">Terminology</Label>
+                {settings.knowledgeBase.terminology.map((term, index) => (
+                  <div key={index} className="flex gap-2 mt-2">
+                    <Input
+                      placeholder="Term"
+                      value={term.term}
+                      onChange={(e) => {
+                        const newTerminology = [...settings.knowledgeBase.terminology];
+                        newTerminology[index].term = e.target.value;
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            terminology: newTerminology
+                          }
+                        }));
+                      }}
+                    />
+                    <Input
+                      placeholder="Definition"
+                      value={term.definition}
+                      onChange={(e) => {
+                        const newTerminology = [...settings.knowledgeBase.terminology];
+                        newTerminology[index].definition = e.target.value;
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            terminology: newTerminology
+                          }
+                        }));
+                      }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        const newTerminology = settings.knowledgeBase.terminology
+                          .filter((_, i) => i !== index);
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            terminology: newTerminology
+                          }
+                        }));
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => {
+                    setSettings(prev => ({
+                      ...prev,
+                      knowledgeBase: {
+                        ...prev.knowledgeBase,
+                        terminology: [
+                          ...prev.knowledgeBase.terminology,
+                          { term: '', definition: '' }
+                        ]
+                      }
+                    }));
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Term
+                </Button>
+              </div>
+
+              {/* Code Examples Section */}
+              <div>
+                <Label className="text-lg font-semibold">Code Examples</Label>
+                {settings.knowledgeBase.codeExamples.map((example, index) => (
+                  <div key={index} className="space-y-2 mt-2 p-4 border rounded-md">
+                    <Input
+                      placeholder="Title"
+                      value={example.title}
+                      onChange={(e) => {
+                        const newExamples = [...settings.knowledgeBase.codeExamples];
+                        newExamples[index].title = e.target.value;
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            codeExamples: newExamples
+                          }
+                        }));
+                      }}
+                    />
+                    <Select
+                      value={example.language}
+                      onValueChange={(value) => {
+                        const newExamples = [...settings.knowledgeBase.codeExamples];
+                        newExamples[index].language = value;
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            codeExamples: newExamples
+                          }
+                        }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select language" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="javascript">JavaScript</SelectItem>
+                        <SelectItem value="python">Python</SelectItem>
+                        <SelectItem value="typescript">TypeScript</SelectItem>
+                        <SelectItem value="java">Java</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Textarea
+                      placeholder="Code"
+                      value={example.code}
+                      onChange={(e) => {
+                        const newExamples = [...settings.knowledgeBase.codeExamples];
+                        newExamples[index].code = e.target.value;
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            codeExamples: newExamples
+                          }
+                        }));
+                      }}
+                      className="font-mono"
+                    />
+                    <Textarea
+                      placeholder="Description"
+                      value={example.description}
+                      onChange={(e) => {
+                        const newExamples = [...settings.knowledgeBase.codeExamples];
+                        newExamples[index].description = e.target.value;
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            codeExamples: newExamples
+                          }
+                        }));
+                      }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        const newExamples = settings.knowledgeBase.codeExamples
+                          .filter((_, i) => i !== index);
+                        setSettings(prev => ({
+                          ...prev,
+                          knowledgeBase: {
+                            ...prev.knowledgeBase,
+                            codeExamples: newExamples
+                          }
+                        }));
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => {
+                    setSettings(prev => ({
+                      ...prev,
+                      knowledgeBase: {
+                        ...prev.knowledgeBase,
+                        codeExamples: [
+                          ...prev.knowledgeBase.codeExamples,
+                          {
+                            title: '',
+                            language: 'javascript',
+                            code: '',
+                            description: ''
+                          }
+                        ]
+                      }
+                    }));
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Code Example
+                </Button>
+              </div>
+            </div>
+          </TabsContent>
+
+
+
+          {/* Requirements Tab - Continued */}
+          <TabsContent value="requirements" className="space-y-4">
+          <div className="space-y-4">
+            {/* Mandatory Elements */}
+            <div>
+              <Label className="text-lg font-semibold">Mandatory Elements</Label>
+              {settings.requirements.mandatoryElements.map((element, index) => (
+                <div key={index} className="flex gap-2 mt-2">
+                  <Input
+                    placeholder="Description"
+                    value={element.description}
+                    onChange={(e) => {
+                      const newElements = [...settings.requirements.mandatoryElements];
+                      newElements[index].description = e.target.value;
+                      setSettings(prev => ({
+                        ...prev,
+                        requirements: {
+                          ...prev.requirements,
+                          mandatoryElements: newElements
+                        }
+                      }));
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      const newElements = settings.requirements.mandatoryElements
+                        .filter((_, i) => i !== index);
+                      setSettings(prev => ({
+                        ...prev,
+                        requirements: {
+                          ...prev.requirements,
+                          mandatoryElements: newElements
+                        }
+                      }));
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                className="mt-2"
+                onClick={() => {
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      mandatoryElements: [
+                        ...prev.requirements.mandatoryElements,
+                        { description: '' }
+                      ]
+                    }
+                  }));
+                }}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Requirement
+              </Button>
+            </div>
+
+            {/* Technologies */}
+            <div>
+              <Label className="text-lg font-semibold">Technologies</Label>
+              {settings.requirements.technologies.map((tech, index) => (
+                <div key={index} className="flex gap-2 mt-2">
+                  <Input
+                    placeholder="Name"
+                    value={tech.name}
+                    onChange={(e) => {
+                      const newTech = [...settings.requirements.technologies];
+                      newTech[index].name = e.target.value;
+                      setSettings(prev => ({
+                        ...prev,
+                        requirements: {
+                          ...prev.requirements,
+                          technologies: newTech
+                        }
+                      }));
+                    }}
+                    className="flex-1"
+                  />
+                  <Input
+                    placeholder="Version"
+                    value={tech.version}
+                    onChange={(e) => {
+                      const newTech = [...settings.requirements.technologies];
+                      newTech[index].version = e.target.value;
+                      setSettings(prev => ({
+                        ...prev,
+                        requirements: {
+                          ...prev.requirements,
+                          technologies: newTech
+                        }
+                      }));
+                    }}
+                    className="w-32"
+                  />
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      checked={tech.required}
+                      onCheckedChange={(checked) => {
+                        const newTech = [...settings.requirements.technologies];
+                        newTech[index].required = checked;
+                        setSettings(prev => ({
+                          ...prev,
+                          requirements: {
+                            ...prev.requirements,
+                            technologies: newTech
+                          }
+                        }));
+                      }}
+                    />
+                    <Label>Required</Label>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      const newTech = settings.requirements.technologies
+                        .filter((_, i) => i !== index);
+                      setSettings(prev => ({
+                        ...prev,
+                        requirements: {
+                          ...prev.requirements,
+                          technologies: newTech
+                        }
+                      }));
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                className="mt-2"
+                onClick={() => {
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      technologies: [
+                        ...prev.requirements.technologies,
+                        { name: '', version: '', required: true }
+                      ]
+                    }
+                  }));
+                }}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Technology
+              </Button>
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* Output Tab */}
+        <TabsContent value="output" className="space-y-4">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Output Format</Label>
+              <Select
+                value={settings.outputPreferences.format}
+                onValueChange={(value) => 
+                  setSettings(prev => ({
+                    ...prev,
+                    outputPreferences: {
+                      ...prev.outputPreferences,
+                      format: value
+                    }
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select format" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="markdown">Markdown</SelectItem>
+                  <SelectItem value="plain">Plain Text</SelectItem>
+                  <SelectItem value="structured">Structured</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Code Block Style</Label>
+              <Select
+                value={settings.outputPreferences.codeBlockStyle}
+                onValueChange={(value) => 
+                  setSettings(prev => ({
+                    ...prev,
+                    outputPreferences: {
+                      ...prev.outputPreferences,
+                      codeBlockStyle: value
+                    }
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select style" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="minimal">Minimal</SelectItem>
+                  <SelectItem value="documented">Documented</SelectItem>
+                  <SelectItem value="verbose">Verbose</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="includeExamples"
+                checked={settings.outputPreferences.includeExamples}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    outputPreferences: {
+                      ...prev.outputPreferences,
+                      includeExamples: checked
+                    }
+                  }))
+                }
+              />
+              <Label htmlFor="includeExamples">Include examples in responses</Label>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      <div className="flex justify-end gap-2 mt-4">
+        <Button onClick={() => onOpenChange(false)} variant="outline">
+          Cancel
+        </Button>
+        <Button onClick={handleSave}>
+          <Save className="h-4 w-4 mr-2" />
+          Save Settings
+        </Button>
+      </div>
+    </DialogContent>
+  </Dialog>
+);
+}
+
+export function ProjectSettingsButton({ project, onSettingsUpdated }) {
+const [showSettings, setShowSettings] = React.useState(false);
+
+return (
+  <>
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => setShowSettings(true)}
+      className="absolute right-2 top-2"
+    >
+      <Settings className="h-4 w-4" />
+    </Button>
+
+    <ProjectSettings
+      open={showSettings}
+      onOpenChange={setShowSettings}
+      project={project}
+      onSave={onSettingsUpdated}
+    />
+  </>
+);
+}
+```
+
+# frontend/src/components/projects/RequirementsTab.jsx
+
+```jsx
+export function RequirementsTab({ settings, setSettings }) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <Label className="text-lg font-semibold">Mandatory Elements</Label>
+          {settings.requirements.mandatoryElements.map((element, index) => (
+            <div key={index} className="flex gap-2 mt-2">
+              <Input
+                placeholder="Description"
+                value={element.description}
+                onChange={(e) => {
+                  const newElements = [...settings.requirements.mandatoryElements];
+                  newElements[index].description = e.target.value;
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      mandatoryElements: newElements
+                    }
+                  }));
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  const newElements = settings.requirements.mandatoryElements
+                    .filter((_, i) => i !== index);
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      mandatoryElements: newElements
+                    }
+                  }));
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+          <Button
+            variant="outline"
+            className="mt-2"
+            onClick={() => {
+              setSettings(prev => ({
+                ...prev,
+                requirements: {
+                  ...prev.requirements,
+                  mandatoryElements: [
+                    ...prev.requirements.mandatoryElements,
+                    { description: '' }
+                  ]
+                }
+              }));
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Requirement
+          </Button>
+        </div>
+  
+        <div>
+          <Label className="text-lg font-semibold">Technologies</Label>
+          {settings.requirements.technologies.map((tech, index) => (
+            <div key={index} className="flex gap-2 mt-2">
+              <Input
+                placeholder="Name"
+                value={tech.name}
+                onChange={(e) => {
+                  const newTech = [...settings.requirements.technologies];
+                  newTech[index].name = e.target.value;
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      technologies: newTech
+                    }
+                  }));
+                }}
+                className="flex-1"
+              />
+              <Input
+                placeholder="Version"
+                value={tech.version}
+                onChange={(e) => {
+                  const newTech = [...settings.requirements.technologies];
+                  newTech[index].version = e.target.value;
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      technologies: newTech
+                    }
+                  }));
+                }}
+                className="w-32"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0"
+                onClick={() => {
+                  const newTech = settings.requirements.technologies
+                    .filter((_, i) => i !== index);
+                  setSettings(prev => ({
+                    ...prev,
+                    requirements: {
+                      ...prev.requirements,
+                      technologies: newTech
+                    }
+                  }));
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+          <Button
+            variant="outline"
+            className="mt-2"
+            onClick={() => {
+              setSettings(prev => ({
+                ...prev,
+                requirements: {
+                  ...prev.requirements,
+                  technologies: [
+                    ...prev.requirements.technologies,
+                    { name: '', version: '', required: true }
+                  ]
+                }
+              }));
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Technology
+          </Button>
+        </div>
+      </div>
+    );
+  }
+```
+
 # frontend/src/components/Sidebar.jsx
 
 ```jsx
+// /frontend/src/components/Sidebar.jsx
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { PlusCircle, MessageSquare } from "lucide-react";
+import { PlusCircle, MessageSquare, FolderPlus, MoreVertical, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from 'date-fns';
+import { ProjectSettingsButton } from './projects/ProjectSettings';
+import { ProjectDialog } from './projects/ProjectDialog';
+import { useState } from 'react';
+import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export function Sidebar({ 
   chats, 
   activeChat, 
   onChatSelect, 
-  onNewChat 
+  onNewChat,
+  projects = [],
+  activeProject,
+  onProjectSelect,
+  onProjectSubmit,
+  onDeleteProject, // Add this prop
+  onDeleteChat     // Add this prop
 }) {
-  return (
-    <div className="w-80 border-r bg-muted/10 p-4 flex flex-col gap-4">
-      <Button 
-        onClick={onNewChat}
-        className="w-full gap-2"
-      >
-        <PlusCircle className="w-4 h-4" />
-        New Chat
-      </Button>
+  const [showProjectDialog, setShowProjectDialog] = useState(false);
+  const [editingProject, setEditingProject] = useState(null);
 
-      <ScrollArea className="flex-1">
-        <div className="space-y-2">
-          {chats.map((chat) => (
-            <Button
-              key={chat.sessionId}
-              variant={activeChat === chat.sessionId ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2 text-left overflow-hidden"
-              onClick={() => onChatSelect(chat.sessionId)}
-            >
-              <MessageSquare className="h-4 w-4 flex-shrink-0" />
-              <div className="flex-1 overflow-hidden">
-                <div className="truncate">
-                  {chat.title || 'New conversation'}
-                </div>
-                <div className="text-xs text-muted-foreground truncate">
-                  {formatDistanceToNow(new Date(chat.updatedAt), { addSuffix: true })}
+  return (
+    <div className="w-80 border-r bg-muted/10 p-4 flex flex-col gap-4 h-full">
+      {/* Projects Section */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Projects</h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setEditingProject(null);
+              setShowProjectDialog(true);
+            }}
+            title="New Project"
+          >
+            <FolderPlus className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <ScrollArea className="flex-shrink-0" style={{ maxHeight: '30vh' }}>
+          <div className="space-y-1">
+            {projects.map((project) => (
+              <div key={project._id} className="relative group">
+                <Button
+                  variant={activeProject?._id === project._id ? "secondary" : "ghost"}
+                  className="w-full justify-start text-left pr-12"
+                  onClick={() => onProjectSelect(project)}
+                >
+                  <div className="flex-1 overflow-hidden">
+                    <div className="truncate">{project.name}</div>
+                    {project.description && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        {project.description}
+                      </div>
+                    )}
+                  </div>
+                </Button>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                  {activeProject?._id === project._id && (
+                    <ProjectSettingsButton
+                      project={project}
+                      onSettingsUpdated={(updatedProject) => {
+                        onProjectSelect(updatedProject);
+                      }}
+                    />
+                  )}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => onDeleteProject?.(project._id)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete Project
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
-            </Button>
-          ))}
+            ))}
+          </div>
+        </ScrollArea>
+      </div>
+
+      <Separator />
+
+      {/* Chats Section */}
+      <div className="flex flex-col gap-2 flex-1">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Chats</h2>
+          <Button 
+            variant="ghost"
+            size="sm"
+            onClick={onNewChat}
+            title="New Chat"
+          >
+            <PlusCircle className="h-4 w-4" />
+          </Button>
         </div>
-      </ScrollArea>
+
+        <ScrollArea className="flex-1">
+          <div className="space-y-2">
+            {chats.map((chat) => (
+              <div key={chat.sessionId} className="group relative">
+                <Button
+                  variant={activeChat === chat.sessionId ? "secondary" : "ghost"}
+                  className="w-full justify-start gap-2 text-left overflow-hidden pr-12"
+                  onClick={() => onChatSelect(chat.sessionId)}
+                >
+                  <MessageSquare className="h-4 w-4 flex-shrink-0" />
+                  <div className="flex-1 overflow-hidden">
+                    <div className="truncate">
+                      {chat.title || 'New conversation'}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {formatDistanceToNow(new Date(chat.updatedAt), { addSuffix: true })}
+                    </div>
+                  </div>
+                </Button>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => onDeleteChat?.(chat.sessionId)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete Chat
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      </div>
+
+      <ProjectDialog
+        open={showProjectDialog}
+        onOpenChange={setShowProjectDialog}
+        project={editingProject}
+        onSubmit={(projectData) => {
+          onProjectSubmit(projectData);
+          setShowProjectDialog(false);
+        }}
+      />
     </div>
   );
 }

@@ -79,6 +79,20 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/api/models", async (req, res) => {
+    try {
+      const response = await fetch(`${ollamaHost}/api/tags`);
+      if (!response.ok) {
+        throw new Error(`Ollama responded with status ${response.status}`);
+      }
+      const data = await response.json();
+      res.json(data.models || []);
+    } catch (error) {
+      console.error("Error fetching models:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
 app.post("/api/chat", async (req, res) => {
     try {
       const { message } = req.body;
@@ -511,6 +525,17 @@ app.post('/api/projects', async (req, res) => {
       res.json({ message: 'Project deleted successfully' });
     } catch (error) {
       console.error('Error deleting project:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/sessions/:sessionId', async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      await Chat.deleteOne({ sessionId });
+      res.json({ message: 'Chat deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting chat:', error);
       res.status(500).json({ error: error.message });
     }
   });
