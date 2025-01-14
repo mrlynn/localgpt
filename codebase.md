@@ -47,6 +47,7 @@ yarn-error.log*
 # Logs
 logs
 *.log
+codebase.md
 
 ```
 
@@ -93,10 +94,26 @@ const chatSchema = new mongoose.Schema({
   }
 });
 
-// Update the updatedAt timestamp on save
-chatSchema.pre('save', function(next) {
+// Add debug logging to the pre-save middleware
+chatSchema.pre('save', async function(next) {
+  console.log('Pre-save middleware triggered for Chat document');
+  console.log('Document contents:', JSON.stringify(this.toJSON(), null, 2));
   this.updatedAt = new Date();
   next();
+});
+
+// Add error handling to catch save failures
+chatSchema.post('save', function(doc, next) {
+  console.log('Document saved successfully:', doc.sessionId);
+  next();
+});
+
+chatSchema.post('save', function(error, doc, next) {
+  if (error) {
+    console.error('Error saving Chat document:', error);
+    console.error('Failed document:', JSON.stringify(doc, null, 2));
+  }
+  next(error);
 });
 
 export const Chat = mongoose.model('Chat', chatSchema);
@@ -138,11 +155,14 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 import { Chat } from './models/Chat.js';  // Make sure we import Chat model
-import chatService from './services/chatService.js';
 
 // Load environment variables before anything else
 dotenv.config();
-
+import ChatService from './services/chatService.js';  // Import the class, not the instance
+const chatService = new ChatService({
+    mongodbUri: process.env.MONGODB_URI,
+    mongodbName: process.env.MONGODB_DB_NAME
+});
 const app = express();
 const port = process.env.PORT || 3000;
 const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434';
@@ -153,39 +173,43 @@ app.use(express.json());
 
 // MongoDB Connection (if configured)
 if (process.env.MONGODB_URI) {
-  console.log('Attempting to connect to MongoDB...');
-  
-  // Enable mongoose debugging
-  mongoose.set('debug', true);
-  
-  mongoose.connect(process.env.MONGODB_URI, {
-    dbName: process.env.MONGODB_DB_NAME || 'deepseek-chat',
-    retryWrites: true,
-    w: 'majority'
-  })
-  .then(() => {
-    console.log('MongoDB connected successfully');
-    console.log('Database:', process.env.MONGODB_DB_NAME || 'deepseek-chat');
+    console.log('Attempting to connect to MongoDB...');
     
-    // Test the connection by trying to create a document
-    return new Chat({
-      sessionId: 'test-connection',
-      title: 'Test Connection',
-      messages: []
-    }).save();
-  })
-  .then((testDoc) => {
-    console.log('Successfully created test document:', testDoc._id);
-    // Clean up test document
-    return Chat.deleteOne({ sessionId: 'test-connection' });
-  })
-  .catch((err) => {
-    console.error('MongoDB error:', err);
-    console.error('Full error object:', JSON.stringify(err, null, 2));
-  });
-} else {
-  console.warn('WARNING: MONGODB_URI not found in environment variables. Running with in-memory storage.');
-}
+    mongoose.set('debug', true);
+    
+    mongoose.connect(process.env.MONGODB_URI, {
+      dbName: process.env.MONGODB_DB_NAME || 'deepseek-chat',
+      retryWrites: true,
+      w: 'majority'
+    })
+    .then(async () => {
+      console.log('MongoDB connected successfully');
+      console.log('Database:', process.env.MONGODB_DB_NAME || 'deepseek-chat');
+      
+      // Test the connection with explicit error handling
+      try {
+        const testDoc = await new Chat({
+          sessionId: 'test-connection',
+          title: 'Test Connection',
+          messages: []
+        }).save();
+        
+        console.log('Successfully created test document:', testDoc._id);
+        await Chat.deleteOne({ sessionId: 'test-connection' });
+        console.log('Successfully cleaned up test document');
+      } catch (error) {
+        console.error('Error during connection test:', error);
+        console.error('Full error:', JSON.stringify(error, null, 2));
+      }
+    })
+    .catch((err) => {
+      console.error('MongoDB connection error:', err);
+      console.error('Full connection error:', JSON.stringify(err, null, 2));
+      console.error('Stack trace:', err.stack);
+    });
+  } else {
+    console.warn('WARNING: MONGODB_URI not found in environment variables. Running with in-memory storage.');
+  }
 
 // Middleware to ensure session ID
 app.use((req, res, next) => {
@@ -341,37 +365,50 @@ app.listen(port, () => {
 
 ```js
 // /backend/services/chatService.js
-import { Chat } from '../models/Chat.js';
-import { v4 as uuidv4 } from 'uuid';
+import { Chat } from "../models/Chat.js";
+import { v4 as uuidv4 } from "uuid";
 
 class ChatService {
-  constructor() {
+    constructor(config = {}) {
     this.inMemoryChats = new Map();
-    this.isMongoDBEnabled = !!process.env.MONGODB_URI;
-    console.log('ChatService initialized with MongoDB:', this.isMongoDBEnabled);
-    console.log('MongoDB URI:', process.env.MONGODB_URI ? 
-      process.env.MONGODB_URI.replace(/mongodb\+srv:\/\/([^:]+):([^@]+)@/, 'mongodb+srv://[username]:[password]@') 
-      : 'Not configured');
-    console.log('MongoDB Database:', process.env.MONGODB_DB_NAME || 'default');
+
+    this.isMongoDBEnabled = !!(config.mongodbUri || process.env.MONGODB_URI);
+    this.mongodbUri = config.mongodbUri || process.env.MONGODB_URI;
+    this.mongodbName = config.mongodbName || process.env.MONGODB_DB_NAME;
+
+    this.isMongoDBEnabled = !!(config.mongodbUri || process.env.MONGODB_URI);
+    this.mongodbUri = config.mongodbUri || process.env.MONGODB_URI;
+    this.mongodbName = config.mongodbName || process.env.MONGODB_DB_NAME;
+    console.log("ChatService initialized with MongoDB:", this.isMongoDBEnabled);
+    console.log(
+      "MongoDB URI:",
+      process.env.MONGODB_URI
+        ? process.env.MONGODB_URI.replace(
+            /mongodb\+srv:\/\/([^:]+):([^@]+)@/,
+            "mongodb+srv://[username]:[password]@"
+          )
+        : "Not configured"
+    );
+    console.log("MongoDB Database:", process.env.MONGODB_DB_NAME || "default");
   }
 
   async initializeChat(sessionId) {
-    console.log('Initializing chat for session:', sessionId);
+    console.log("Initializing chat for session:", sessionId);
     if (this.isMongoDBEnabled) {
       try {
         const chat = await Chat.findOne({ sessionId });
         if (!chat) {
-          console.log('Creating new chat in MongoDB for session:', sessionId);
+          console.log("Creating new chat in MongoDB for session:", sessionId);
           return await Chat.create({ sessionId, messages: [] });
         }
-        console.log('Found existing chat in MongoDB for session:', sessionId);
+        console.log("Found existing chat in MongoDB for session:", sessionId);
         return chat;
       } catch (error) {
-        console.error('Error initializing chat in MongoDB:', error);
+        console.error("Error initializing chat in MongoDB:", error);
         throw error;
       }
     } else {
-      console.log('Using in-memory storage for session:', sessionId);
+      console.log("Using in-memory storage for session:", sessionId);
       if (!this.inMemoryChats.has(sessionId)) {
         this.inMemoryChats.set(sessionId, []);
       }
@@ -380,14 +417,14 @@ class ChatService {
   }
 
   async getMessages(sessionId) {
-    console.log('Getting messages for session:', sessionId);
+    console.log("Getting messages for session:", sessionId);
     if (this.isMongoDBEnabled) {
       try {
         const chat = await Chat.findOne({ sessionId });
         console.log(`Found ${chat?.messages?.length || 0} messages in MongoDB`);
         return chat ? chat.messages : [];
       } catch (error) {
-        console.error('Error getting messages from MongoDB:', error);
+        console.error("Error getting messages from MongoDB:", error);
         throw error;
       }
     } else {
@@ -396,41 +433,61 @@ class ChatService {
   }
 
   async addMessages(sessionId, userMessage, assistantMessage) {
-    console.log('Adding messages for session:', sessionId);
+    console.log("Adding messages for session:", sessionId);
     const messages = [
-      { role: 'user', content: userMessage, timestamp: new Date() },
-      { role: 'assistant', content: assistantMessage, timestamp: new Date() }
+      { role: "user", content: userMessage, timestamp: new Date() },
+      { role: "assistant", content: assistantMessage, timestamp: new Date() },
     ];
 
     if (this.isMongoDBEnabled) {
       try {
-        console.log('MongoDB is enabled, attempting to save messages...');
+        console.log("MongoDB is enabled, attempting to save messages...");
         let chat = await Chat.findOne({ sessionId });
-        
+
         if (!chat) {
-          console.log('No existing chat found, creating new document');
-          chat = new Chat({ 
-            sessionId, 
+          console.log("No existing chat found, creating new document");
+          chat = new Chat({
+            sessionId,
             messages: [],
-            title: userMessage.slice(0, 50) + (userMessage.length > 50 ? '...' : '')
+            title:
+              userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : ""),
           });
-          console.log('Created new chat document:', chat);
+
+          // Add validation check
+          const validationError = chat.validateSync();
+          if (validationError) {
+            console.error("Validation error:", validationError);
+            throw validationError;
+          }
+
+          console.log(
+            "Created new chat document:",
+            JSON.stringify(chat.toJSON(), null, 2)
+          );
         } else {
-          console.log('Found existing chat document');
+          console.log("Found existing chat document");
         }
-        
-        console.log('Adding new messages to chat');
+
+        console.log("Adding new messages to chat");
         chat.messages.push(...messages);
         chat.updatedAt = new Date();
-        
-        const savedChat = await chat.save();
-        console.log('Successfully saved chat. New message count:', savedChat.messages.length);
-        console.log('Chat document _id:', savedChat._id);
-        
-        return savedChat.messages;
+
+        try {
+          const savedChat = await chat.save();
+          console.log("Successfully saved chat. Document ID:", savedChat._id);
+          console.log("New message count:", savedChat.messages.length);
+          return savedChat.messages;
+        } catch (saveError) {
+          console.error("Error during save operation:", saveError);
+          if (saveError.code === 11000) {
+            console.error("Duplicate key error - sessionId already exists");
+          }
+          throw saveError;
+        }
       } catch (error) {
-        console.error('Error saving messages to MongoDB:', error);
-        console.error('Error stack:', error.stack);
+        console.error("Error saving messages to MongoDB:", error);
+        console.error("Full error object:", JSON.stringify(error, null, 2));
+        console.error("Error stack:", error.stack);
         throw error;
       }
     } else {
@@ -443,7 +500,7 @@ class ChatService {
   }
 
   async clearChat(sessionId) {
-    console.log('Clearing chat for session:', sessionId);
+    console.log("Clearing chat for session:", sessionId);
     if (this.isMongoDBEnabled) {
       try {
         const result = await Chat.findOneAndUpdate(
@@ -451,10 +508,10 @@ class ChatService {
           { $set: { messages: [], updatedAt: new Date() } },
           { upsert: true, new: true }
         );
-        console.log('Successfully cleared chat in MongoDB');
+        console.log("Successfully cleared chat in MongoDB");
         return result;
       } catch (error) {
-        console.error('Error clearing chat in MongoDB:', error);
+        console.error("Error clearing chat in MongoDB:", error);
         throw error;
       }
     } else {
@@ -463,36 +520,39 @@ class ChatService {
   }
 
   async getAllSessions() {
-    console.log('Getting all sessions');
+    console.log("Getting all sessions");
     if (this.isMongoDBEnabled) {
       try {
-        const chats = await Chat.find({}, 'sessionId title createdAt updatedAt messages')
-          .sort({ updatedAt: -1 });
+        const chats = await Chat.find(
+          {},
+          "sessionId title createdAt updatedAt messages"
+        ).sort({ updatedAt: -1 });
         console.log(`Found ${chats.length} sessions in MongoDB`);
-        return chats.map(chat => ({
+        return chats.map((chat) => ({
           sessionId: chat.sessionId,
-          title: chat.title || 'New conversation',
+          title: chat.title || "New conversation",
           createdAt: chat.createdAt,
           updatedAt: chat.updatedAt,
-          messageCount: chat.messages.length
+          messageCount: chat.messages.length,
         }));
       } catch (error) {
-        console.error('Error getting sessions from MongoDB:', error);
+        console.error("Error getting sessions from MongoDB:", error);
         throw error;
       }
     } else {
-      return Array.from(this.inMemoryChats.keys()).map(sessionId => ({
+      return Array.from(this.inMemoryChats.keys()).map((sessionId) => ({
         sessionId,
-        title: 'New conversation',
+        title: "New conversation",
         createdAt: new Date(),
         updatedAt: new Date(),
-        messageCount: this.inMemoryChats.get(sessionId).length
+        messageCount: this.inMemoryChats.get(sessionId).length,
       }));
     }
   }
 }
 
-export default new ChatService();
+export default ChatService;
+
 ```
 
 # frontend/components.json
@@ -768,6 +828,12 @@ import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Sidebar } from './components/Sidebar';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {    
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -787,6 +853,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
+import EnvironmentCheck from './components/EnvironmentCheck';
 
 function App() {
   const [messages, setMessages] = useState([]);
@@ -796,6 +863,7 @@ function App() {
   const [copySuccess, setCopySuccess] = useState(null);
   const [chats, setChats] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
+  const [showEnvCheck, setShowEnvCheck] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -956,6 +1024,14 @@ function App() {
               <Button
                 variant="ghost"
                 size="icon"
+                onClick={() => setShowEnvCheck(true)}
+                title="Environment Status"
+              >
+                <Settings className="w-5 h-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => setIsDarkMode(!isDarkMode)}
               >
                 {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
@@ -964,89 +1040,27 @@ function App() {
           </div>
         </div>
 
+        {/* Environment Check Dialog */}
+        <Dialog open={showEnvCheck} onOpenChange={setShowEnvCheck}>
+          <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Environment Status</DialogTitle>
+            </DialogHeader>
+            <EnvironmentCheck />
+          </DialogContent>
+        </Dialog>
+
+        {/* Rest of your existing JSX remains the same */}
         <div className="flex-1 overflow-hidden">
           <Card className="h-full border-0">
             <ScrollArea className="h-[calc(100vh-200px)]">
-              <div className="p-4">
-                {messages.length === 0 ? (
-                  <div className="text-center text-muted-foreground mt-8 space-y-2">
-                    <MessageSquare className="w-12 h-12 mx-auto opacity-50" />
-                    <p className="text-lg">Start a conversation</p>
-                    <p className="text-sm">DeepSeek is ready to help</p>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    {messages.map((message, index) => (
-                      <div
-                        key={index}
-                        className={`group relative ${
-                          message.role === 'user' ? 'ml-12' : 'mr-12'
-                        }`}
-                      >
-                        <div className={`flex items-start gap-2 rounded-lg p-4 ${
-                          message.role === 'user' ? 'bg-primary/10' : 'bg-muted'
-                        }`}>
-                          <div className="flex-1 overflow-hidden">
-                            <div className="font-medium mb-1 text-sm">
-                              {message.role === 'user' ? 'You' : 'Assistant'}
-                            </div>
-                            <div className="prose prose-sm dark:prose-invert max-w-none">
-                              <ChatMessage 
-                                message={message.content}
-                                isDarkMode={isDarkMode}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {/* ... rest of the existing chat UI code ... */}
             </ScrollArea>
           </Card>
         </div>
 
         <div className="p-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                onClick={clearChat}
-                className="flex items-center gap-2"
-              >
-                <Trash2 className="w-4 h-4" />
-                Clear
-              </Button>
-              <Button
-                variant="outline"
-                onClick={regenerateLastResponse}
-                disabled={messages.length < 2 || isLoading}
-                className="flex items-center gap-2"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Regenerate
-              </Button>
-            </div>
-            <form onSubmit={handleSubmit} className="flex gap-2">
-              <Input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type your message..."
-                disabled={isLoading}
-                className="flex-grow min-h-[50px] text-base py-6 px-4"
-              />
-              <Button 
-                type="submit" 
-                disabled={isLoading}
-                className="flex items-center gap-2"
-              >
-                <Send className="w-4 h-4" />
-                {isLoading ? 'Sending...' : 'Send'}
-              </Button>
-            </form>
-          </div>
+          {/* ... rest of the existing input UI code ... */}
         </div>
       </main>
     </div>
@@ -1167,6 +1181,182 @@ const ChatMessage = ({ message, isDarkMode }) => {
 };
 
 export default ChatMessage;
+```
+
+# frontend/src/components/EnvironmentCheck.jsx
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import { AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+
+const EnvironmentCheck = () => {
+  const [checks, setChecks] = useState({
+    ollama: { status: 'pending', details: null },
+    mongodb: { status: 'pending', details: null },
+    environment: { status: 'pending', details: {} }
+  });
+  const [loading, setLoading] = useState(false);
+
+  const checkEnvironment = async () => {
+    setLoading(true);
+    setChecks({
+      ollama: { status: 'pending', details: null },
+      mongodb: { status: 'pending', details: null },
+      environment: { status: 'pending', details: {} }
+    });
+
+    try {
+      // Check Ollama
+      const ollamaRes = await fetch('http://localhost:3000/api/test-ollama');
+      const ollamaData = await ollamaRes.json();
+      setChecks(prev => ({
+        ...prev,
+        ollama: {
+          status: ollamaData.status === 'ok' ? 'success' : 'error',
+          details: ollamaData
+        }
+      }));
+
+      // Check MongoDB through debug endpoint
+      const mongoRes = await fetch('http://localhost:3000/api/debug/chats');
+      const mongoData = await mongoRes.json();
+      setChecks(prev => ({
+        ...prev,
+        mongodb: {
+          status: mongoData.error ? 'error' : 'success',
+          details: mongoData
+        }
+      }));
+
+      // Check Environment Variables
+      const envVars = {
+        'PORT': process.env.PORT || '3000 (default)',
+        'OLLAMA_HOST': process.env.OLLAMA_HOST || 'http://localhost:11434 (default)',
+        'MODEL_NAME': process.env.MODEL_NAME || 'deepseek-coder:6.7b (default)',
+        'MONGODB_URI': process.env.MONGODB_URI ? 'Set' : 'Not Set',
+        'MONGODB_DB_NAME': process.env.MONGODB_DB_NAME || 'deepseek-chat (default)'
+      };
+
+      setChecks(prev => ({
+        ...prev,
+        environment: {
+          status: 'success',
+          details: envVars
+        }
+      }));
+
+    } catch (error) {
+      console.error('Error running environment checks:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkEnvironment();
+  }, []);
+
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'success':
+        return <CheckCircle2 className="h-6 w-6 text-green-500" />;
+      case 'error':
+        return <XCircle className="h-6 w-6 text-red-500" />;
+      default:
+        return <AlertCircle className="h-6 w-6 text-yellow-500" />;
+    }
+  };
+
+  const renderDetails = (check) => {
+    if (!check.details) return null;
+
+    switch (check.status) {
+      case 'success':
+        return (
+          <div className="mt-2 text-sm text-muted-foreground">
+            {typeof check.details === 'object' ? (
+              <pre className="p-2 bg-muted rounded-md overflow-auto">
+                {JSON.stringify(check.details, null, 2)}
+              </pre>
+            ) : (
+              check.details
+            )}
+          </div>
+        );
+      case 'error':
+        return (
+          <Alert variant="destructive" className="mt-2">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>
+              {typeof check.details === 'object' 
+                ? JSON.stringify(check.details, null, 2)
+                : check.details}
+            </AlertDescription>
+          </Alert>
+        );
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <Card className="w-full max-w-2xl mx-auto">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          Environment Status
+          <Button 
+            onClick={checkEnvironment} 
+            disabled={loading}
+            variant="outline"
+            size="sm"
+          >
+            Refresh Checks
+          </Button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Ollama Check */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            {getStatusIcon(checks.ollama.status)}
+            <h3 className="font-semibold">Ollama Connection</h3>
+          </div>
+          {renderDetails(checks.ollama)}
+        </div>
+
+        {/* MongoDB Check */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            {getStatusIcon(checks.mongodb.status)}
+            <h3 className="font-semibold">MongoDB Connection</h3>
+          </div>
+          {renderDetails(checks.mongodb)}
+        </div>
+
+        {/* Environment Variables */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            {getStatusIcon(checks.environment.status)}
+            <h3 className="font-semibold">Environment Variables</h3>
+          </div>
+          {renderDetails(checks.environment)}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+export default EnvironmentCheck;
 ```
 
 # frontend/src/components/Sidebar.jsx

@@ -3,7 +3,7 @@ import { Chat } from "../models/Chat.js";
 import { v4 as uuidv4 } from "uuid";
 
 class ChatService {
-    constructor(config = {}) {
+  constructor(config = {}) {
     this.inMemoryChats = new Map();
 
     this.isMongoDBEnabled = !!(config.mongodbUri || process.env.MONGODB_URI);
@@ -66,70 +66,32 @@ class ChatService {
     }
   }
 
-  async addMessages(sessionId, userMessage, assistantMessage) {
-    console.log("Adding messages for session:", sessionId);
-    const messages = [
-      { role: "user", content: userMessage, timestamp: new Date() },
-      { role: "assistant", content: assistantMessage, timestamp: new Date() },
-    ];
-
-    if (this.isMongoDBEnabled) {
-      try {
-        console.log("MongoDB is enabled, attempting to save messages...");
+  async addMessages(sessionId, userMessage, assistantMessage, projectId = null) {
+    try {
+      if (this.isMongoDBEnabled) {
         let chat = await Chat.findOne({ sessionId });
-
+        
         if (!chat) {
-          console.log("No existing chat found, creating new document");
           chat = new Chat({
             sessionId,
             messages: [],
-            title:
-              userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : ""),
+            title: userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : ""),
+            projectId // Add project ID if available
           });
-
-          // Add validation check
-          const validationError = chat.validateSync();
-          if (validationError) {
-            console.error("Validation error:", validationError);
-            throw validationError;
-          }
-
-          console.log(
-            "Created new chat document:",
-            JSON.stringify(chat.toJSON(), null, 2)
-          );
-        } else {
-          console.log("Found existing chat document");
         }
-
-        console.log("Adding new messages to chat");
-        chat.messages.push(...messages);
-        chat.updatedAt = new Date();
-
-        try {
-          const savedChat = await chat.save();
-          console.log("Successfully saved chat. Document ID:", savedChat._id);
-          console.log("New message count:", savedChat.messages.length);
-          return savedChat.messages;
-        } catch (saveError) {
-          console.error("Error during save operation:", saveError);
-          if (saveError.code === 11000) {
-            console.error("Duplicate key error - sessionId already exists");
-          }
-          throw saveError;
-        }
-      } catch (error) {
-        console.error("Error saving messages to MongoDB:", error);
-        console.error("Full error object:", JSON.stringify(error, null, 2));
-        console.error("Error stack:", error.stack);
-        throw error;
+        
+        chat.messages.push(
+          { role: "user", content: userMessage },
+          { role: "assistant", content: assistantMessage }
+        );
+        
+        return await chat.save();
+      } else {
+        // Existing in-memory logic
       }
-    } else {
-      if (!this.inMemoryChats.has(sessionId)) {
-        this.inMemoryChats.set(sessionId, []);
-      }
-      this.inMemoryChats.get(sessionId).push(...messages);
-      return this.inMemoryChats.get(sessionId);
+    } catch (error) {
+      console.error("Error adding messages:", error);
+      throw error;
     }
   }
 

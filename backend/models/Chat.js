@@ -18,25 +18,29 @@ const messageSchema = new mongoose.Schema({
 });
 
 const chatSchema = new mongoose.Schema({
-  sessionId: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  title: {
-    type: String,
-    default: 'New conversation'
-  },
-  messages: [messageSchema],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+    sessionId: {
+        type: String,
+        required: true,
+        unique: true
+      },
+      projectId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Project'
+      },
+    title: {
+      type: String,
+      default: 'New conversation'
+    },
+    messages: [messageSchema],
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
+    }
+  });
 
 // Add debug logging to the pre-save middleware
 chatSchema.pre('save', async function(next) {
