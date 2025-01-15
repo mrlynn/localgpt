@@ -10,8 +10,8 @@ A modern chat interface for Ollama, featuring a clean UI with project management
 [![MongoDB](https://img.shields.io/badge/MongoDB-8.9-47A248.svg)](https://www.mongodb.com/)
 [![DeepSeek Coder](https://img.shields.io/badge/DeepSeek%20Coder-6.7B-FF6B6B.svg)](https://github.com/deepseek-ai/DeepSeek-Coder)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
-[![Contributors](https://img.shields.io/github/contributors/mrlynn/deepseek-chat.svg)](https://github.com/mrlynn/deepseek-chat/graphs/contributors)
-[![Last Commit](https://img.shields.io/github/last-commit/mrlynn/deepseek-chat.svg)](https://github.com/mrlynn/deepseek-chat/commits/main)
+[![Contributors](https://img.shields.io/github/contributors/mrlynn/deepseek-chat.svg)](https://github.com/mrlynn/localgpt/graphs/contributors)
+[![Last Commit](https://img.shields.io/github/last-commit/mrlynn/localgpt.svg)](https://github.com/mrlynn/localgpt/commits/main)
 
 ## Screenshot
 
