@@ -2,6 +2,19 @@
 
 A modern chat interface for Ollama, featuring a clean UI with project management capabilities, dark mode support, and markdown rendering.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![React](https://img.shields.io/badge/React-18.2-blue.svg)](https://reactjs.org/)
+[![Vite](https://img.shields.io/badge/Vite-5.0-646CFF.svg)](https://vitejs.dev/)
+[![Node](https://img.shields.io/badge/Node-20.x-339933.svg)](https://nodejs.org/)
+[![Ollama](https://img.shields.io/badge/Ollama-0.1.29-black.svg)](https://ollama.ai/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-8.9-47A248.svg)](https://www.mongodb.com/)
+[![DeepSeek Coder](https://img.shields.io/badge/DeepSeek%20Coder-6.7B-FF6B6B.svg)](https://github.com/deepseek-ai/DeepSeek-Coder)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+[![Contributors](https://img.shields.io/github/contributors/mrlynn/deepseek-chat.svg)](https://github.com/mrlynn/deepseek-chat/graphs/contributors)
+[![Last Commit](https://img.shields.io/github/last-commit/mrlynn/deepseek-chat.svg)](https://github.com/mrlynn/deepseek-chat/commits/main)
+
+## Screenshot
+
 ![Screenshot showing the chat interface](images/screenshot1.png)
 
 ## Features
