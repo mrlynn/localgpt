@@ -1,12 +1,7 @@
+// /frontend/src/components/EnvironmentCheck.jsx
 import React, { useState, useEffect } from 'react';
 import { AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 
@@ -49,20 +44,18 @@ const EnvironmentCheck = () => {
         }
       }));
 
-      // Check Environment Variables
-      const envVars = {
-        'PORT': process.env.PORT || '3000 (default)',
-        'OLLAMA_HOST': process.env.OLLAMA_HOST || 'http://localhost:11434 (default)',
-        'MODEL_NAME': process.env.MODEL_NAME || 'deepseek-coder:6.7b (default)',
-        'MONGODB_URI': process.env.MONGODB_URI ? 'Set' : 'Not Set',
-        'MONGODB_DB_NAME': process.env.MONGODB_DB_NAME || 'deepseek-chat (default)'
-      };
-
+      // Check Environment Variables from backend
+      const envRes = await fetch('http://localhost:3000/api/env-check');
+      const envData = await envRes.json();
       setChecks(prev => ({
         ...prev,
         environment: {
-          status: 'success',
-          details: envVars
+          status: envData.status === 'ok' ? 'success' : 'error',
+          details: {
+            variables: envData.envVars,
+            message: envData.message,
+            missingVars: envData.missingVars
+          }
         }
       }));
 
@@ -137,13 +130,13 @@ const EnvironmentCheck = () => {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Ollama Check */}
+        {/* Environment Variables */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            {getStatusIcon(checks.ollama.status)}
-            <h3 className="font-semibold">Ollama Connection</h3>
+            {getStatusIcon(checks.environment.status)}
+            <h3 className="font-semibold">Environment Variables</h3>
           </div>
-          {renderDetails(checks.ollama)}
+          {renderDetails(checks.environment)}
         </div>
 
         {/* MongoDB Check */}
@@ -155,13 +148,13 @@ const EnvironmentCheck = () => {
           {renderDetails(checks.mongodb)}
         </div>
 
-        {/* Environment Variables */}
+        {/* Ollama Check */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            {getStatusIcon(checks.environment.status)}
-            <h3 className="font-semibold">Environment Variables</h3>
+            {getStatusIcon(checks.ollama.status)}
+            <h3 className="font-semibold">Ollama Connection</h3>
           </div>
-          {renderDetails(checks.environment)}
+          {renderDetails(checks.ollama)}
         </div>
       </CardContent>
     </Card>

@@ -79,6 +79,29 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/api/env-check", (req, res) => {
+    const envVars = {
+      PORT: process.env.PORT || '3000 (default)',
+      OLLAMA_HOST: process.env.OLLAMA_HOST || 'http://localhost:11434 (default)',
+      MODEL_NAME: process.env.MODEL_NAME || 'deepseek-coder:6.7b (default)',
+      MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Not Set',
+      MONGODB_DB_NAME: process.env.MONGODB_DB_NAME || 'deepseek-chat (default)'
+    };
+  
+    // Check if required environment variables are set
+    const requiredVars = ['MONGODB_URI'];
+    const missingVars = requiredVars.filter(varName => !process.env[varName]);
+  
+    res.json({
+      status: missingVars.length === 0 ? 'ok' : 'error',
+      envVars,
+      missingVars,
+      message: missingVars.length > 0 
+        ? `Missing required environment variables: ${missingVars.join(', ')}` 
+        : 'All required environment variables are set'
+    });
+  });
+
 app.get("/api/models", async (req, res) => {
     try {
       const response = await fetch(`${ollamaHost}/api/tags`);
