@@ -75,7 +75,9 @@ export default {
         DEFAULT: {
           css: {
             maxWidth: 'none',
+            color: 'inherit',
             code: {
+              color: 'inherit',
               backgroundColor: 'hsl(var(--muted))',
               padding: '0.2em 0.4em',
               borderRadius: '0.25rem',

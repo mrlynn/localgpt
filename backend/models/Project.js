@@ -59,6 +59,15 @@ const projectSchema = new mongoose.Schema({
         definition: String,
         aliases: [String]
       }],
+      files: [{
+        name: String,
+        content: String,
+        type: String,
+        uploadedAt: {
+          type: Date,
+          default: Date.now
+        }
+      }],
       // Reference documents
       references: [{
         title: String,

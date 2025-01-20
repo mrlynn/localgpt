@@ -1,11 +1,12 @@
 // /frontend/src/components/projects/ProjectDialog.jsx
-import React from 'react';
+import React, { useState } from 'react'; // Add this import
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { FileUpload } from "@/components/ui/file-upload"
 import {
   Select,
   SelectContent,
@@ -17,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Save } from "lucide-react";
 
 export function ProjectDialog({ open, onOpenChange, project = null, onSubmit }) {
+  const [files, setFiles] = useState([])
   const [formData, setFormData] = React.useState({
     name: '',
     description: '',
@@ -88,11 +90,26 @@ export function ProjectDialog({ open, onOpenChange, project = null, onSubmit }) 
     }
   }, [project, open]);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit(formData);
-    onOpenChange(false);
-  };
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    const formData = new FormData()
+    formData.append('name', name)
+    formData.append('description', description)
+    
+    files.forEach(file => {
+      formData.append('files', file)
+    })
+  
+    try {
+      const response = await fetch('http://localhost:3000/api/projects', {
+        method: 'POST',
+        body: formData
+      })
+      // ... rest of the code
+    } catch (error) {
+      console.error('Error creating project:', error)
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -140,6 +157,19 @@ export function ProjectDialog({ open, onOpenChange, project = null, onSubmit }) 
                   rows={3}
                 />
               </div>
+              <div className="space-y-2">
+                <Label>Training Files</Label>
+                <FileUpload
+                    value={files}
+                    onChange={setFiles}
+                    onRemove={(file) => setFiles(prev => prev.filter(f => f !== file))}
+                    accept=".txt,.md,.csv,.json"
+                    multiple
+                />
+                <p className="text-xs text-muted-foreground">
+                    Upload files to train this project's context
+                </p>
+                </div>
             </TabsContent>
 
             {/* Style & Context Tab */}

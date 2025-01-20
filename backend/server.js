@@ -7,6 +7,9 @@ import { v4 as uuidv4 } from "uuid";
 import { Chat } from "./models/Chat.js"; // Make sure we import Chat model
 import ProjectService from './services/projectService.js';
 import { Project } from './models/Project.js';  // Add this line
+import multer from 'multer'
+import { mkdir } from 'fs/promises'
+import path from 'path'
 
 // Load environment variables before anything else
 dotenv.config();
@@ -25,6 +28,24 @@ const app = express();
 const port = process.env.PORT || 3000;
 const ollamaHost = process.env.OLLAMA_HOST || "http://localhost:11434";
 const modelName = process.env.MODEL_NAME || "deepseek-coder:6.7b";
+
+const storage = multer.diskStorage({
+    destination: async function (req, file, cb) {
+      const uploadDir = path.join(process.cwd(), 'uploads')
+      try {
+        await mkdir(uploadDir, { recursive: true })
+        cb(null, uploadDir)
+      } catch (error) {
+        cb(error)
+      }
+    },
+    filename: function (req, file, cb) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+      cb(null, uniqueSuffix + '-' + file.originalname)
+    }
+  })
+
+  const upload = multer({ storage })
 
 app.use(cors());
 app.use(express.json());
@@ -453,17 +474,39 @@ app.get("/api/test-ollama", async (req, res) => {
   }
 });
 
-app.post('/api/projects', async (req, res) => {
+app.post('/api/projects', upload.array('files'), async (req, res) => {
     try {
-      const { name, description } = req.body;
-      const project = new Project({ name, description });
-      await project.save();
-      res.json(project);
+      const { name, description } = req.body
+      const files = req.files || []
+  
+      // Process uploaded files
+      const fileContents = []
+      for (const file of files) {
+        const content = await fs.readFile(file.path, 'utf8')
+        fileContents.push({
+          name: file.originalname,
+          content,
+          type: path.extname(file.originalname).slice(1)
+        })
+      }
+  
+      const project = new Project({
+        name,
+        description,
+        config: {
+          knowledgeBase: {
+            files: fileContents
+          }
+        }
+      })
+  
+      await project.save()
+      res.json(project)
     } catch (error) {
-      console.error('Error creating project:', error);
-      res.status(500).json({ error: error.message });
+      console.error('Error creating project:', error)
+      res.status(500).json({ error: error.message })
     }
-  });
+  })
 
   app.get('/api/projects', async (req, res) => {
     try {

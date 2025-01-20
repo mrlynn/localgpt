@@ -51,6 +51,263 @@ codebase.md
 
 ```
 
+# backend/config/environments.js
+
+```js
+// /backend/config/environments.js
+export const environments = {
+    development: {
+      allowEmptyMessages: true,
+      validateBeforeSave: false
+    },
+    staging: {
+      allowEmptyMessages: true, 
+      validateBeforeSave: true
+    },
+    production: {
+      allowEmptyMessages: false,
+      validateBeforeSave: true
+    }
+  };
+```
+
+# backend/examples/githubPrTask.js
+
+```js
+// /backend/examples/tasks/githubPrTask.js
+export const createGitHubPRTask = (repoUrl, prTitle, prBody, head, base) => ({
+    title: `Create PR: ${prTitle}`,
+    description: `Create a pull request in ${repoUrl}`,
+    priority: 3,
+    requiredCapabilities: ['github_access'],
+    requiredResources: [{
+      type: 'github',
+      permissions: ['write']
+    }],
+    config: {
+      type: 'github',
+      action: 'createPullRequest',
+      repoUrl,
+      prTitle,
+      prBody,
+      head,
+      base
+    }
+  });
+```
+
+# backend/models/Agent.js
+
+```js
+// /backend/models/Agent.js
+import mongoose from "mongoose";
+
+const skillSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  proficiency: {
+    type: String,
+    enum: ["beginner", "intermediate", "expert"],
+    default: "intermediate",
+  },
+  description: String,
+});
+
+const resourceAccessSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    enum: ["github", "filesystem", "command"],
+    required: true,
+  },
+  config: {
+    // GitHub specific
+    repoAccess: [
+      {
+        repoUrl: String,
+        permissions: [
+          {
+            type: String,
+            enum: ["read", "write", "admin"],
+          },
+        ],
+      },
+    ],
+    // Filesystem specific
+    allowedPaths: [
+      {
+        path: String,
+        permissions: [
+          {
+            type: String,
+            enum: ["read", "write", "execute"],
+          },
+        ],
+      },
+    ],
+    // Command specific
+    allowedCommands: [
+      {
+        command: String,
+        arguments: [String],
+        description: String,
+      },
+    ],
+  },
+  // For encrypted credentials like GitHub tokens
+  credentials: {
+    type: Map,
+    of: String,
+  },
+});
+
+const agentSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+    unique: true,
+  },
+  description: {
+    type: String,
+    trim: true,
+  },
+  status: {
+    type: String,
+    enum: ["available", "busy", "offline"],
+    default: "available",
+  },
+  type: {
+    type: String,
+    enum: ["task", "assistant", "system"],
+    default: "task",
+  },
+  skills: [skillSchema],
+  capabilities: [{
+    type: String,
+    enum: ['github_access', 'filesystem_access', 'command_execution', 'web_access']  // Added web_access
+  }],
+  resources: [
+    {
+      resourceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Resource",
+        required: true,
+      },
+      type: {
+        type: String,
+        required: true,
+        enum: ['github', 'filesystem', 'command', 'web']  // Added 'web'
+      },
+      permissions: {
+        type: String,
+        enum: ["read", "write", "admin", "full"],
+        default: "read",
+      },
+    },
+  ],
+  config: {
+    maxConcurrentTasks: {
+      type: Number,
+      default: 1,
+    },
+    timeout: {
+      type: Number, // in milliseconds
+      default: 30000,
+    },
+    retryAttempts: {
+      type: Number,
+      default: 3,
+    },
+  },
+  metadata: {
+    type: Map,
+    of: mongoose.Schema.Types.Mixed,
+  },
+  lastActive: {
+    type: Date,
+    default: Date.now,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+// Middleware to update timestamps
+agentSchema.pre("save", function (next) {
+  this.updatedAt = new Date();
+  next();
+});
+
+// Method to check if agent can execute a specific task
+agentSchema.methods.canExecuteTask = function (task) {
+  // Check if agent has required capabilities
+  const hasRequiredCapabilities = task.requiredCapabilities.every((cap) =>
+    this.capabilities.includes(cap)
+  );
+
+  // Check if agent has required skills at sufficient proficiency
+  const hasRequiredSkills = task.requiredSkills.every((required) => {
+    const agentSkill = this.skills.find((s) => s.name === required.name);
+    return (
+      agentSkill &&
+      this.checkProficiencySufficient(
+        agentSkill.proficiency,
+        required.minProficiency
+      )
+    );
+  });
+
+  return (
+    hasRequiredCapabilities && hasRequiredSkills && this.status === "available"
+  );
+};
+
+// Method to validate resource access
+agentSchema.methods.hasResourceAccess = function (resourceType, action, path) {
+  const resource = this.resources.find((r) => r.type === resourceType);
+  if (!resource) return false;
+
+  switch (resourceType) {
+    case "filesystem":
+      return resource.config.allowedPaths.some(
+        (p) => path.startsWith(p.path) && p.permissions.includes(action)
+      );
+    case "github":
+      return resource.config.repoAccess.some(
+        (repo) => repo.repoUrl === path && repo.permissions.includes(action)
+      );
+    case "command":
+      return resource.config.allowedCommands.some(
+        (cmd) => cmd.command === path
+      );
+    default:
+      return false;
+  }
+};
+
+// Helper for checking skill proficiency levels
+agentSchema.methods.checkProficiencySufficient = function (
+  agentProficiency,
+  requiredProficiency
+) {
+  const levels = ["beginner", "intermediate", "expert"];
+  const agentLevel = levels.indexOf(agentProficiency);
+  const requiredLevel = levels.indexOf(requiredProficiency);
+  return agentLevel >= requiredLevel;
+};
+
+export const Agent = mongoose.model("Agent", agentSchema);
+
+```
+
 # backend/models/Chat.js
 
 ```js
@@ -332,6 +589,227 @@ ${restrictions.map(r => `- ${r.description}`).join('\n')}`);
 };
 ```
 
+# backend/models/Resource.js
+
+```js
+// /backend/models/Resource.js
+import mongoose from 'mongoose';
+import { encryptFields, decryptFields } from '../utils/dbHelpers.js';
+
+const resourceSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    enum: ['github', 'filesystem', 'command', 'web'], // Added 'web'
+    required: true
+  },
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  description: {
+    type: String,
+    trim: true
+  },
+  config: {
+    // GitHub specific
+    githubToken: String,
+    repoUrl: String,
+    repositories: [{
+      url: String,
+      permissions: [{
+        type: String,
+        enum: ['read', 'write', 'admin']
+      }]
+    }],
+    // Filesystem specific
+    basePath: String,
+    allowedPaths: [{
+      path: String,
+      permissions: [{
+        type: String,
+        enum: ['read', 'write', 'execute']  // Added execute to allowed values
+      }]
+    }],
+    // For direct permissions array if used
+    permissions: [{
+      type: String,
+      enum: ['read', 'write', 'execute']  // Made consistent with filesystem permissions
+    }],
+    // Command specific
+    allowedCommands: [{
+      command: String,
+      arguments: [String],
+      description: String
+    }]
+  },
+  credentials: {
+    type: Map,
+    of: String
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Middleware to update timestamps
+resourceSchema.pre('save', async function(next) {
+  this.updatedAt = new Date();
+  if (this.isModified('config') || this.isModified('credentials')) {
+    await encryptFields(this, ['config.githubToken', 'credentials']);
+  }
+  next();
+});
+
+resourceSchema.post('find', async function(docs) {
+    for (const doc of docs) {
+      await decryptFields(doc, ['config.githubToken', 'credentials']);
+    }
+  });
+
+  resourceSchema.post('findOne', async function(doc) {
+    if (doc) {
+      await decryptFields(doc, ['config.githubToken', 'credentials']);
+    }
+  });
+
+export const Resource = mongoose.model('Resource', resourceSchema);
+```
+
+# backend/models/Task.js
+
+```js
+// /backend/models/Task.js
+import mongoose from 'mongoose';
+
+const taskSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: true
+  },
+  description: String,
+  type: {
+    type: String,
+    enum: [
+      'analyze',      // Analyze data, code, text
+      'monitor',      // Monitor websites, APIs, systems
+      'summarize',    // Summarize content
+      'report',       // Generate reports
+      'alert'         // Send alerts based on conditions
+    ],
+    required: true
+  },
+  schedule: {
+    frequency: {
+      type: String,
+      enum: ['once', 'hourly', 'daily', 'weekly'],
+      default: 'once'
+    },
+    startDate: {
+      type: Date,
+      default: Date.now
+    },
+    endDate: Date,
+    timeOfDay: String,    // For daily/weekly tasks (HH:mm format)
+    daysOfWeek: [Number]  // 0-6 for weekly tasks
+  },
+  input: {
+    type: Map,
+    of: mongoose.Schema.Types.Mixed
+  },
+  status: {
+    type: String,
+    enum: ['scheduled', 'running', 'completed', 'failed'],
+    default: 'scheduled'
+  },
+  lastRun: Date,
+  nextRun: Date,
+  results: [{
+    timestamp: {
+      type: Date,
+      default: Date.now
+    },
+    output: mongoose.Schema.Types.Mixed,
+    error: String
+  }],
+  projectId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Project'
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Update timestamps and calculate next run on save
+taskSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  
+  // Calculate next run based on schedule
+  if (this.schedule && this.schedule.frequency !== 'once') {
+    const now = new Date();
+    
+    switch (this.schedule.frequency) {
+      case 'hourly':
+        this.nextRun = new Date(now.setHours(now.getHours() + 1));
+        break;
+      case 'daily':
+        if (this.schedule.timeOfDay) {
+          const [hours, minutes] = this.schedule.timeOfDay.split(':');
+          const next = new Date();
+          next.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+          if (next <= now) next.setDate(next.getDate() + 1);
+          this.nextRun = next;
+        }
+        break;
+      case 'weekly':
+        if (this.schedule.daysOfWeek?.length && this.schedule.timeOfDay) {
+          const [hours, minutes] = this.schedule.timeOfDay.split(':');
+          const next = new Date();
+          next.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+          
+          // Find next scheduled day
+          while (!this.schedule.daysOfWeek.includes(next.getDay())) {
+            next.setDate(next.getDate() + 1);
+          }
+          
+          if (next <= now) next.setDate(next.getDate() + 7);
+          this.nextRun = next;
+        }
+        break;
+    }
+  }
+  
+  next();
+});
+
+// Find tasks that need to be run
+taskSchema.statics.findDue = function() {
+  return this.find({
+    status: 'scheduled',
+    nextRun: { $lte: new Date() }
+  }).sort('nextRun');
+};
+
+// Basic indexes for performance
+taskSchema.index({ status: 1, nextRun: 1 });
+taskSchema.index({ projectId: 1 });
+taskSchema.index({ type: 1 });
+taskSchema.index({ createdAt: -1 });
+
+export const Task = mongoose.model('Task', taskSchema);
+```
+
 # backend/package.json
 
 ```json
@@ -441,6 +919,43 @@ app.use((req, res, next) => {
   res.setHeader("X-Session-ID", req.sessionId);
   next();
 });
+
+app.get("/api/env-check", (req, res) => {
+    const envVars = {
+      PORT: process.env.PORT || '3000 (default)',
+      OLLAMA_HOST: process.env.OLLAMA_HOST || 'http://localhost:11434 (default)',
+      MODEL_NAME: process.env.MODEL_NAME || 'deepseek-coder:6.7b (default)',
+      MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Not Set',
+      MONGODB_DB_NAME: process.env.MONGODB_DB_NAME || 'deepseek-chat (default)'
+    };
+  
+    // Check if required environment variables are set
+    const requiredVars = ['MONGODB_URI'];
+    const missingVars = requiredVars.filter(varName => !process.env[varName]);
+  
+    res.json({
+      status: missingVars.length === 0 ? 'ok' : 'error',
+      envVars,
+      missingVars,
+      message: missingVars.length > 0 
+        ? `Missing required environment variables: ${missingVars.join(', ')}` 
+        : 'All required environment variables are set'
+    });
+  });
+
+app.get("/api/models", async (req, res) => {
+    try {
+      const response = await fetch(`${ollamaHost}/api/tags`);
+      if (!response.ok) {
+        throw new Error(`Ollama responded with status ${response.status}`);
+      }
+      const data = await response.json();
+      res.json(data.models || []);
+    } catch (error) {
+      console.error("Error fetching models:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
 
 app.post("/api/chat", async (req, res) => {
     try {
@@ -909,6 +1424,342 @@ app.listen(port, () => {
 
 ```
 
+# backend/services/AgentOrchestrationService.js
+
+```js
+// /backend/services/AgentOrchestrationService.js
+import EventEmitter from "events";
+import { Agent } from "../models/Agent.js";
+import { Task } from "../models/Task.js";
+import { Resource } from "../models/Resource.js";
+import { executionFramework } from "./executionFramework.js";
+
+// /backend/services/AgentOrchestrationService.js
+
+class AgentOrchestrationService extends EventEmitter {
+  constructor() {
+    super();
+    this.runningAgents = new Map();
+    this.executionFramework = executionFramework;
+    this.pollingInterval = 5000;
+    this.taskCheckInterval = null;
+    this.initialized = false;
+  }
+
+  async start() {
+    if (this.initialized) {
+      return;
+    }
+
+    console.log("Starting Agent Orchestration Service...");
+
+    try {
+      // Find all agents that should be available
+      const agents = await Agent.find({}).populate("resources.resourceId");
+      console.log(`Found ${agents.length} agents to initialize`);
+
+      // Start each agent
+      for (const agent of agents) {
+        const agentContext = {
+          id: agent._id,
+          name: agent.name,
+          capabilities: agent.capabilities,
+          resources: agent.resources,
+          tasks: new Set(),
+          status: "available",
+        };
+
+        this.runningAgents.set(agent._id.toString(), agentContext);
+
+        // Update agent status
+        await Agent.findByIdAndUpdate(agent._id, {
+          status: "available",
+          lastActive: new Date(),
+        });
+
+        console.log(`Started agent: ${agent.name} (${agent._id})`);
+      }
+
+      // Start task polling
+      this.taskCheckInterval = setInterval(
+        () => this.checkForTasks(),
+        this.pollingInterval
+      );
+
+      console.log("Agent Orchestration Service started with agents:", {
+        count: this.runningAgents.size,
+        agents: Array.from(this.runningAgents.values()).map((a) => ({
+          id: a.id,
+          name: a.name,
+          capabilities: a.capabilities,
+        })),
+      });
+
+      this.initialized = true;
+      this.emit("started");
+    } catch (error) {
+      console.error("Failed to start Agent Orchestration Service:", error);
+      this.emit("error", error);
+    }
+  }
+
+  async checkForTasks() {
+    try {
+      // Find pending tasks
+      const pendingTasks = await Task.find({
+        status: "pending",
+        nextAttempt: { $lte: new Date() },
+      }).sort({ priority: -1, createdAt: 1 });
+
+      console.log(
+        `Checking ${pendingTasks.length} pending tasks against ${this.runningAgents.size} agents`
+      );
+
+      for (const task of pendingTasks) {
+        await this.matchTaskToAgent(task);
+      }
+    } catch (error) {
+      console.error("Error checking for tasks:", error);
+    }
+  }
+
+  async matchTaskToAgent(task) {
+    console.log(`Matching task ${task._id}:`, {
+      type: task.type,
+      capabilities: task.requiredCapabilities,
+    });
+
+    // Find an agent with matching capabilities
+    for (const [agentId, agent] of this.runningAgents.entries()) {
+      const hasCapabilities = task.requiredCapabilities.every((cap) =>
+        agent.capabilities.includes(cap)
+      );
+
+      if (hasCapabilities) {
+        console.log(`Found matching agent ${agent.name} for task ${task._id}`);
+
+        // Assign task to agent
+        task.status = "assigned";
+        task.assignedTo = agentId;
+        await task.save();
+
+        // Add to agent's tasks
+        agent.tasks.add(task._id.toString());
+
+        // Execute the task
+        this.executeTask(agentId, task._id);
+        return true;
+      }
+    }
+
+    console.log(`No matching agent found for task ${task._id}`);
+    return false;
+  }
+
+  async executeTask(agentId, task) {
+    const agent = this.runningAgents.get(agentId);
+    if (!agent) {
+      throw new Error('Agent not found');
+    }
+  
+    try {
+      console.log(`Executing task ${task._id} with agent ${agent.name}:`, {
+        taskType: task.type,
+        taskConfig: task.config
+      });
+  
+      // Execute task with full task config
+      const result = await this.executionFramework.executeTask(agentId, {
+        type: task.type,
+        ...task.config
+      });
+  
+      // Update task
+      task.status = 'completed';
+      task.result = result;
+      task.completedAt = new Date();
+      await task.save();
+  
+      // Remove from agent's tasks
+      agent.tasks.delete(task._id.toString());
+  
+      console.log(`Task ${task._id} completed successfully`);
+  
+    } catch (error) {
+      console.error(`Error executing task ${task._id}:`, error);
+      
+      // Update task status
+      task.status = 'failed';
+      task.error = { 
+        message: error.message,
+        stack: error.stack
+      };
+      await task.save();
+  
+      agent.tasks.delete(task._id.toString());
+    }
+  }
+}
+
+const agentOrchestrationService = new AgentOrchestrationService();
+export default agentOrchestrationService;
+
+```
+
+# backend/services/agentService.js
+
+```js
+// /backend/services/agentService.js
+import { Agent } from '../models/Agent.js';
+import { encryptCredentials, decryptCredentials } from '../utils/encryption.js';
+
+class AgentService {
+  constructor() {
+    this.activeAgents = new Map();
+  }
+
+  async createAgent(agentData) {
+    try {
+      // Encrypt any sensitive credentials before saving
+      if (agentData.resources) {
+        for (const resource of agentData.resources) {
+          if (resource.credentials) {
+            resource.credentials = await encryptCredentials(resource.credentials);
+          }
+        }
+      }
+
+      const agent = new Agent(agentData);
+      await agent.save();
+      return agent;
+    } catch (error) {
+      console.error('Error creating agent:', error);
+      throw error;
+    }
+  }
+
+  async getAgent(agentId) {
+    try {
+      const agent = await Agent.findById(agentId);
+      if (!agent) {
+        throw new Error('Agent not found');
+      }
+      return agent;
+    } catch (error) {
+      console.error('Error getting agent:', error);
+      throw error;
+    }
+  }
+
+  async updateAgentStatus(agentId, status) {
+    try {
+      const agent = await Agent.findByIdAndUpdate(
+        agentId,
+        { 
+          status,
+          lastActive: new Date()
+        },
+        { new: true }
+      );
+      return agent;
+    } catch (error) {
+      console.error('Error updating agent status:', error);
+      throw error;
+    }
+  }
+
+  async addResourceAccess(agentId, resourceData) {
+    try {
+      const agent = await Agent.findById(agentId);
+      if (!agent) {
+        throw new Error('Agent not found');
+      }
+
+      // Encrypt credentials if present
+      if (resourceData.credentials) {
+        resourceData.credentials = await encryptCredentials(resourceData.credentials);
+      }
+
+      agent.resources.push(resourceData);
+      await agent.save();
+      return agent;
+    } catch (error) {
+      console.error('Error adding resource access:', error);
+      throw error;
+    }
+  }
+
+  async removeResourceAccess(agentId, resourceType) {
+    try {
+      const agent = await Agent.findById(agentId);
+      if (!agent) {
+        throw new Error('Agent not found');
+      }
+
+      agent.resources = agent.resources.filter(r => r.type !== resourceType);
+      await agent.save();
+      return agent;
+    } catch (error) {
+      console.error('Error removing resource access:', error);
+      throw error;
+    }
+  }
+
+  async validateResourceAccess(agentId, resourceType, action, path) {
+    try {
+      const agent = await Agent.findById(agentId);
+      if (!agent) {
+        throw new Error('Agent not found');
+      }
+
+      return agent.hasResourceAccess(resourceType, action, path);
+    } catch (error) {
+      console.error('Error validating resource access:', error);
+      throw error;
+    }
+  }
+
+  async findAvailableAgentForTask(task) {
+    try {
+      const agents = await Agent.find({ status: 'available' });
+      for (const agent of agents) {
+        if (agent.canExecuteTask(task)) {
+          return agent;
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('Error finding available agent:', error);
+      throw error;
+    }
+  }
+
+  async getAgentMetrics(agentId) {
+    try {
+      const agent = await Agent.findById(agentId);
+      if (!agent) {
+        throw new Error('Agent not found');
+      }
+
+      // Calculate various metrics
+      const metrics = {
+        tasksCompleted: await this.getCompletedTaskCount(agentId),
+        averageTaskDuration: await this.calculateAverageTaskDuration(agentId),
+        successRate: await this.calculateSuccessRate(agentId),
+        lastActiveTime: agent.lastActive
+      };
+
+      return metrics;
+    } catch (error) {
+      console.error('Error getting agent metrics:', error);
+      throw error;
+    }
+  }
+}
+
+export default new AgentService();
+```
+
 # backend/services/chatService.js
 
 ```js
@@ -1065,6 +1916,220 @@ export default ChatService;
 
 ```
 
+# backend/services/executionFramework.js
+
+```js
+// /backend/services/executionFramework.js
+import { spawn } from 'child_process';
+import { Octokit } from '@octokit/rest';
+import fs from 'fs/promises';
+import path from 'path';
+import { webExecutionService } from './webExecutionService.js';
+import { Agent } from '../models/Agent.js';
+import { Resource } from '../models/Resource.js';
+
+export class ExecutionFramework {
+  constructor() {
+    this.runningTasks = new Map();
+  }
+
+  async executeTask(agentId, taskConfig) {
+    try {
+        console.log('Executing task:', {
+            agentId,
+            taskType: taskConfig.type,
+            action: taskConfig.action
+          });
+      const resources = await Resource.find({ agentId });
+      
+      // Validate resource permissions
+      this.validateResourceAccess(taskConfig, resources);
+
+      // Execute based on task type
+      switch (taskConfig.type) {
+        case 'github':
+          return await this.executeGitHubTask(taskConfig, resources);
+        case 'filesystem':
+          return await this.executeFileSystemTask(taskConfig, resources);
+        case 'command':
+          return await this.executeCommandTask(taskConfig, resources);
+        case 'web':
+            return await webExecutionService.executeWebTask(taskConfig); 
+        default:
+          throw new Error(`Unsupported task type: ${taskConfig.type}`);
+      }
+    } catch (error) {
+      console.error('Task execution failed:', error);
+      throw error;
+    }
+  }
+
+  async validateResourceAccess(agentId, taskConfig) {
+    // Skip validation for web tasks
+    if (taskConfig.type === 'web') {
+      return true;
+    }
+
+    try {
+      // Get agent with populated resources
+      const agent = await Agent.findById(agentId).populate('resources.resourceId');
+      if (!agent || !agent.resources) {
+        console.log('No agent or resources found:', { agentId });
+        return false;
+      }
+
+      console.log('Validating resources for agent:', {
+        agentId,
+        resourceCount: agent.resources.length
+      });
+
+      // Check for matching resource type
+      const matchingResource = agent.resources.find(r => 
+        r && r.type === taskConfig.type
+      );
+
+      if (!matchingResource) {
+        console.log(`No matching resource found for type: ${taskConfig.type}`);
+        return false;
+      }
+
+      return true;
+
+    } catch (error) {
+      console.error('Error validating resource access:', error);
+      return false;
+    }
+  }
+
+  async executeGitHubTask(taskConfig, resources) {
+    const githubResource = resources.find(r => r.type === 'github');
+    if (!githubResource) {
+      throw new Error('GitHub resource not found');
+    }
+
+    const octokit = new Octokit({
+      auth: githubResource.config.githubToken 
+    });
+
+    switch (taskConfig.action) {
+      case 'createPullRequest':
+        return await this.createGitHubPR(octokit, taskConfig);
+      case 'clone':
+        return await this.cloneRepository(taskConfig.repoUrl, githubResource);
+      default:
+        throw new Error(`Unsupported GitHub action: ${taskConfig.action}`);
+    }
+  }
+
+  async executeFileSystemTask(taskConfig, resources) {
+    const fsResource = resources.find(r => r.type === 'filesystem');
+    if (!fsResource) {
+      throw new Error('Filesystem resource not found');
+    }
+
+    // Validate path is within allowed paths
+    const targetPath = path.resolve(taskConfig.path);
+    const isAllowed = fsResource.config.allowedPaths.some(allowedPath => 
+      targetPath.startsWith(path.resolve(allowedPath))
+    );
+
+    if (!isAllowed) {
+      throw new Error('Path access denied');
+    }
+
+    switch (taskConfig.action) {
+      case 'read':
+        return await fs.readFile(targetPath, 'utf8');
+      case 'write':
+        return await fs.writeFile(targetPath, taskConfig.content);
+      case 'delete':
+        return await fs.unlink(targetPath);
+      default:
+        throw new Error(`Unsupported filesystem action: ${taskConfig.action}`);
+    }
+  }
+
+  async executeCommandTask(taskConfig, resources) {
+    const commandResource = resources.find(r => r.type === 'command');
+    if (!commandResource) {
+      throw new Error('Command execution resource not found');
+    }
+
+    // Validate command is whitelisted
+    const isAllowed = commandResource.config.allowedCommands.some(allowed =>
+      taskConfig.command.startsWith(allowed)
+    );
+
+    if (!isAllowed) {
+      throw new Error('Command not in whitelist');
+    }
+
+    return new Promise((resolve, reject) => {
+      const process = spawn(taskConfig.command, taskConfig.args || [], {
+        shell: true,
+        cwd: taskConfig.cwd || undefined
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      process.stdout.on('data', (data) => {
+        stdout += data;
+      });
+
+      process.stderr.on('data', (data) => {
+        stderr += data; 
+      });
+
+      process.on('close', (code) => {
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(new Error(`Command failed with code ${code}: ${stderr}`));
+        }
+      });
+    });
+  }
+
+  async executeWebTask(taskConfig) {
+    try {
+      return await webExecutionService.executeWebTask(taskConfig);
+    } catch (error) {
+      console.error('Web task execution failed:', error);
+      throw error;
+    }
+  }
+
+  // Helper methods for GitHub operations
+  async createGitHubPR(octokit, config) {
+    const [owner, repo] = config.repoUrl.split('/').slice(-2);
+    
+    return await octokit.pulls.create({
+      owner,
+      repo,
+      title: config.prTitle,
+      body: config.prBody,
+      head: config.head,
+      base: config.base
+    });
+  }
+
+  async cloneRepository(repoUrl, resource) {
+    const cloneDir = path.join(os.tmpdir(), 'agent-workspace', uuidv4());
+    await fs.mkdir(cloneDir, { recursive: true });
+
+    return await this.executeCommand({
+      command: 'git',
+      args: ['clone', repoUrl, cloneDir],
+      cwd: cloneDir
+    });
+  }
+}
+
+// Export singleton instance
+export const executionFramework = new ExecutionFramework();
+```
+
 # backend/services/projectService.js
 
 ```js
@@ -1126,6 +2191,537 @@ class ProjectService {
   }
   
   export default ProjectService;
+```
+
+# backend/services/taskExecutionService.js
+
+```js
+// /backend/services/taskExecutionService.js
+import fetch from 'node-fetch';
+
+class TaskExecutionService {
+  constructor() {
+    this.ollamaHost = process.env.OLLAMA_HOST || "http://localhost:11434";
+    this.modelName = process.env.MODEL_NAME || "deepseek-coder:6.7b";
+  }
+
+  async executeTask(task) {
+    console.log(`Executing ${task.type} task: ${task.title}`);
+
+    try {
+      let prompt = '';
+      let result = null;
+
+      switch (task.type) {
+        case 'summarize':
+          prompt = this.buildSummarizationPrompt(task);
+          result = await this.callLLM(prompt);
+          break;
+        case 'analyze':
+          prompt = this.buildAnalysisPrompt(task);
+          result = await this.callLLM(prompt);
+          break;
+        case 'monitor':
+          result = await this.handleMonitoringTask(task);
+          break;
+        case 'report':
+          prompt = this.buildReportPrompt(task);
+          result = await this.callLLM(prompt);
+          break;
+        case 'alert':
+          result = await this.handleAlertTask(task);
+          break;
+        default:
+          throw new Error(`Unsupported task type: ${task.type}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error(`Task execution failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  buildSummarizationPrompt(task) {
+    return `Summarize the following content:
+Context: ${task.description}
+Content: ${task.input.get('content')}
+Instructions: ${task.input.get('instructions') || 'Provide a concise summary'}
+
+Please provide a summary that:
+1. Captures the main points
+2. Is clear and concise
+3. Follows any specific instructions provided`;
+  }
+
+  buildAnalysisPrompt(task) {
+    return `Analyze the following:
+Context: ${task.description}
+Content: ${task.input.get('content')}
+Analysis Type: ${task.input.get('analysisType') || 'general'}
+Instructions: ${task.input.get('instructions') || 'Provide a detailed analysis'}
+
+Please provide an analysis that:
+1. Identifies key patterns or insights
+2. Supports findings with evidence
+3. Follows any specific instructions provided`;
+  }
+
+  buildReportPrompt(task) {
+    return `Generate a report based on the following:
+Context: ${task.description}
+Data: ${task.input.get('data')}
+Format: ${task.input.get('format') || 'markdown'}
+Instructions: ${task.input.get('instructions') || 'Generate a comprehensive report'}`;
+  }
+
+  async handleMonitoringTask(task) {
+    const url = task.input.get('url');
+    const response = await fetch(url);
+    const content = await response.text();
+    
+    // Use LLM to analyze changes if needed
+    if (task.input.get('analyzeChanges')) {
+      const prompt = `Analyze the following webpage content for significant changes:
+Content: ${content}
+Previous State: ${task.input.get('previousState') || 'None'}
+Criteria: ${task.input.get('criteria') || 'Look for any significant changes'}`;
+      
+      return await this.callLLM(prompt);
+    }
+
+    return { 
+      timestamp: new Date(),
+      content,
+      url 
+    };
+  }
+
+  async handleAlertTask(task) {
+    const condition = task.input.get('condition');
+    const data = task.input.get('data');
+    
+    const prompt = `Evaluate the following condition and determine if an alert should be triggered:
+Condition: ${condition}
+Data: ${data}
+Instructions: ${task.input.get('instructions') || 'Evaluate if the condition is met'}
+
+Please provide:
+1. Whether the condition is met (true/false)
+2. A brief explanation of why
+3. Recommended actions if applicable`;
+
+    const evaluation = await this.callLLM(prompt);
+    
+    return {
+      timestamp: new Date(),
+      alert: evaluation.includes('true'),
+      evaluation
+    };
+  }
+
+  async callLLM(prompt) {
+    try {
+      const response = await fetch(`${this.ollamaHost}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: this.modelName,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a helpful assistant that performs various tasks like summarization, analysis, and report generation.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`LLM request failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.message?.content || data;
+
+    } catch (error) {
+      console.error('LLM call failed:', error);
+      throw error;
+    }
+  }
+}
+
+export const taskExecutionService = new TaskExecutionService();
+```
+
+# backend/services/taskScheduler.js
+
+```js
+// /backend/services/taskScheduler.js
+import { Task } from '../models/Task.js';
+import { taskExecutionService } from './taskExecutionService.js';
+
+class TaskScheduler {
+  constructor() {
+    this.interval = null;
+  }
+
+  start() {
+    // Check for tasks every minute
+    this.interval = setInterval(() => this.checkTasks(), 60000);
+    console.log('Task scheduler started');
+  }
+
+  stop() {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+    console.log('Task scheduler stopped');
+  }
+
+  async checkTasks() {
+    try {
+      const dueTasks = await Task.findDue();
+      
+      for (const task of dueTasks) {
+        this.executeTask(task);
+      }
+    } catch (error) {
+      console.error('Error checking tasks:', error);
+    }
+  }
+
+  async executeTask(task) {
+    try {
+      // Update task status
+      task.status = 'running';
+      task.lastRun = new Date();
+      await task.save();
+
+      // Execute the task
+      const result = await taskExecutionService.executeTask(task);
+
+      // Update task with results
+      task.status = 'completed';
+      task.results.push({
+        timestamp: new Date(),
+        output: result
+      });
+
+      // Calculate next run if scheduled
+      if (task.schedule.frequency !== 'once') {
+        // The pre-save middleware will calculate the next run time
+        task.markModified('schedule');
+      }
+
+      await task.save();
+
+    } catch (error) {
+      console.error(`Task execution failed: ${error.message}`);
+      
+      task.status = 'failed';
+      task.results.push({
+        timestamp: new Date(),
+        error: error.message
+      });
+      await task.save();
+    }
+  }
+}
+
+export const taskScheduler = new TaskScheduler();
+```
+
+# backend/services/webExecutionService.js
+
+```js
+// /backend/services/webExecutionService.js
+
+import fetch from 'node-fetch';
+import * as cheerio from 'cheerio';
+
+class WebExecutionService {
+  constructor() {
+    this.userAgent = 'Mozilla/5.0 (compatible; LocalAIBot/1.0)';
+  }
+
+  async executeWebTask(taskConfig) {
+    console.log('Executing web task:', taskConfig);
+
+    try {
+      switch (taskConfig.action) {
+        case 'search':
+          return await this.performSearch(taskConfig);
+        case 'scrape':
+          return await this.scrapePage(taskConfig);
+        case 'monitor':
+          return await this.monitorPage(taskConfig);
+        default:
+          throw new Error(`Unsupported web action: ${taskConfig.action}`);
+      }
+    } catch (error) {
+      console.error('Web task execution failed:', error);
+      throw error;
+    }
+  }
+
+  async performSearch(config) {
+    const { query, engine = 'google', numResults = 5 } = config;
+
+    // For demonstration, return mock search results
+    // In production, integrate with actual search APIs
+    return {
+      engine,
+      query,
+      timestamp: new Date(),
+      results: [
+        {
+          title: 'Example Search Result 1',
+          url: 'https://example.com/1',
+          snippet: 'Example search result content...'
+        },
+        {
+          title: 'Example Search Result 2',
+          url: 'https://example.com/2',
+          snippet: 'Example search result content...'
+        }
+      ]
+    };
+  }
+
+  async scrapePage(config) {
+    const { url, selectors } = config;
+
+    try {
+      console.log('Scraping URL:', url);
+      const response = await fetch(url, {
+        headers: { 'User-Agent': this.userAgent }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch page: ${response.statusText}`);
+      }
+
+      const html = await response.text();
+      const $ = cheerio.load(html);
+      const results = {};
+
+      // Process each selector
+      for (const [key, selector] of Object.entries(selectors)) {
+        if (typeof selector === 'string') {
+          results[key] = $(selector).text().trim();
+        } else if (selector.type === 'list') {
+          results[key] = $(selector.selector)
+            .map((i, el) => $(el).text().trim())
+            .get();
+        }
+      }
+
+      return {
+        url,
+        timestamp: new Date(),
+        results
+      };
+
+    } catch (error) {
+      console.error('Scraping failed:', error);
+      throw error;
+    }
+  }
+
+  async monitorPage(config) {
+    const { url, conditions } = config;
+    
+    try {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': this.userAgent }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch page: ${response.statusText}`);
+      }
+
+      const html = await response.text();
+      const $ = cheerio.load(html);
+
+      const results = {
+        url,
+        timestamp: new Date(),
+        conditions: {}
+      };
+
+      for (const [key, condition] of Object.entries(conditions)) {
+        const element = $(condition.selector);
+        const value = element.text().trim();
+        
+        results.conditions[key] = {
+          met: this.evaluateCondition(value, condition),
+          value,
+          expected: condition.value
+        };
+      }
+
+      return results;
+
+    } catch (error) {
+      console.error('Monitoring failed:', error);
+      throw error;
+    }
+  }
+
+  evaluateCondition(actual, condition) {
+    switch (condition.operator) {
+      case 'equals':
+        return actual === condition.value;
+      case 'contains':
+        return actual.includes(condition.value);
+      case 'greaterThan':
+        return parseFloat(actual) > parseFloat(condition.value);
+      case 'lessThan':
+        return parseFloat(actual) < parseFloat(condition.value);
+      default:
+        throw new Error(`Unsupported condition operator: ${condition.operator}`);
+    }
+  }
+}
+
+export const webExecutionService = new WebExecutionService();
+```
+
+# backend/tests/chat.test.js
+
+```js
+// /backend/tests/chat.test.js
+describe('Chat Flow', () => {
+    const testCases = [
+      {
+        name: 'Basic user/assistant message exchange',
+        userMessage: 'Hello',
+        assistantMessage: 'Hi there',
+        expected: { success: true }
+      },
+      {
+        name: 'Empty assistant message during streaming',
+        userMessage: 'Hello',
+        assistantMessage: '',
+        expected: { success: true } 
+      },
+      {
+        name: 'Multiple message accumulation',
+        userMessage: 'Hi',
+        assistantMessageChunks: ['H', 'e', 'l', 'l', 'o'],
+        expected: { success: true }
+      }
+    ];
+  });
+```
+
+# backend/utils/dbHelpers.js
+
+```js
+// /backend/utils/dbHelpers.js
+import { encryptCredentials, decryptCredentials, shouldEncrypt } from './encryption.js';
+
+export const encryptFields = async (doc, fields) => {
+  for (const field of fields) {
+    const value = doc[field];
+    if (value && shouldEncrypt(value)) {
+      doc[field] = await encryptCredentials(value);
+    }
+  }
+  return doc;
+};
+
+export const decryptFields = async (doc, fields) => {
+  for (const field of fields) {
+    const value = doc[field];
+    if (value) {
+      try {
+        doc[field] = await decryptCredentials(value);
+      } catch (error) {
+        console.warn(`Failed to decrypt field ${field}:`, error);
+      }
+    }
+  }
+  return doc;
+};
+```
+
+# backend/utils/encryption.js
+
+```js
+// /backend/utils/encryption.js
+import crypto from 'crypto';
+
+// In a production environment, these should be secure environment variables
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'your-secret-encryption-key-32-chars-!!'; // 32 bytes
+const IV_LENGTH = 16; // For AES-256-CBC
+
+export const encryptCredentials = async (data) => {
+  try {
+    if (!data) return null;
+
+    // Convert object to string if necessary
+    const text = typeof data === 'object' ? JSON.stringify(data) : data.toString();
+    
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+  } catch (error) {
+    console.error('Encryption error:', error);
+    throw new Error('Failed to encrypt data');
+  }
+};
+
+export const decryptCredentials = async (text) => {
+  try {
+    if (!text) return null;
+
+    const parts = text.split(':');
+    if (parts.length !== 2) throw new Error('Invalid encrypted data format');
+
+    const iv = Buffer.from(parts[0], 'hex');
+    const encryptedText = Buffer.from(parts[1], 'hex');
+    
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    
+    const result = decrypted.toString();
+
+    // Try to parse as JSON if possible
+    try {
+      return JSON.parse(result);
+    } catch {
+      return result;
+    }
+  } catch (error) {
+    console.error('Decryption error:', error);
+    throw new Error('Failed to decrypt data');
+  }
+};
+
+// Helper to test if data needs encryption (contains sensitive information)
+export const shouldEncrypt = (data) => {
+  const sensitiveKeys = ['token', 'key', 'password', 'secret', 'credential'];
+  if (typeof data === 'object') {
+    return Object.keys(data).some(key => 
+      sensitiveKeys.some(sensitive => key.toLowerCase().includes(sensitive))
+    );
+  }
+  return false;
+};
 ```
 
 # frontend/components.json
@@ -1294,6 +2890,10 @@ export default {
 
 ```
 
+# frontend/public/favicon.ico
+
+This is a binary file of the type: Binary
+
 # frontend/public/vite.svg
 
 This is a file of the type: SVG Image
@@ -1445,6 +3045,7 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [showProjectDialog, setShowProjectDialog] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const [editingProject, setEditingProject] = useState(null);
@@ -1525,6 +3126,10 @@ function App() {
     await fetchChats();
   };
 
+  const handleModelChange = (model) => {
+    setSelectedModel(model);
+  };
+
   const handleProjectSettingsUpdate = async (updatedProject) => {
     try {
       // Refresh the projects list
@@ -1593,7 +3198,10 @@ function App() {
           "X-Session-ID": activeChat || "",
           ...(activeProject && { "X-Project-ID": activeProject._id }),
         },
-        body: JSON.stringify({ message: userMessage }),
+        body: JSON.stringify({ 
+          message: userMessage,
+          model: selectedModel 
+        }),
       });
 
       if (!response.ok) {
@@ -1817,8 +3425,8 @@ function App() {
           <div className="flex items-center justify-between p-4">
             <div className="flex items-center gap-4">
               <Menu onNewChat={handleNewChat} />
-              <ModelSelector />
-            </div>
+              <ModelSelector onModelChange={setSelectedModel} />
+              </div>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -1958,6 +3566,1252 @@ export default App;
 
 This is a file of the type: SVG Image
 
+# frontend/src/components/agents/AddAgentDialog.jsx
+
+```jsx
+// /frontend/src/components/agents/AddAgentDialog.jsx
+import React, { useState } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Bot, Trash2, Plus, ShieldCheck } from "lucide-react";
+
+const AGENT_TYPES = {
+  task: {
+    name: "Task Agent",
+    description: "Executes specific tasks with defined resources",
+    capabilities: ["file_access", "github_access", "command_execution", "web_access"]  // Added web_access
+  },
+  assistant: {
+    name: "Assistant Agent",
+    description: "Provides conversational assistance and guidance",
+    capabilities: ["file_access", "github_access"]
+  },
+  system: {
+    name: "System Agent",
+    description: "Manages system-level operations and monitoring",
+    capabilities: ["command_execution", "system_monitoring"]
+  }
+};
+
+export function AddAgentDialog({ open, onOpenChange, onSubmit, availableResources = [] }) {
+  const [currentStep, setCurrentStep] = useState(0);
+  const [formData, setFormData] = useState({
+    name: "",
+    description: "",
+    type: "task",
+    skills: [],
+    capabilities: [],
+    selectedResources: [],
+    config: {
+      maxConcurrentTasks: 1,
+      timeout: 30000,
+      retryAttempts: 3
+    }
+  });
+
+  const [newSkill, setNewSkill] = useState({
+    name: "",
+    proficiency: "intermediate"
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit(formData);
+  };
+
+  const updateForm = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const addSkill = () => {
+    if (newSkill.name) {
+      setFormData(prev => ({
+        ...prev,
+        skills: [...prev.skills, { ...newSkill }]
+      }));
+      setNewSkill({ name: "", proficiency: "intermediate" });
+    }
+  };
+
+  const removeSkill = (skillName) => {
+    setFormData(prev => ({
+      ...prev,
+      skills: prev.skills.filter(skill => skill.name !== skillName)
+    }));
+  };
+
+  const toggleResource = (resourceId) => {
+    setFormData(prev => ({
+      ...prev,
+      selectedResources: prev.selectedResources.includes(resourceId)
+        ? prev.selectedResources.filter(id => id !== resourceId)
+        : [...prev.selectedResources, resourceId]
+    }));
+  };
+
+  const steps = [
+    {
+      title: "Basic Information",
+      content: (
+        <div className="space-y-4">
+          <div>
+            <Label>Agent Name</Label>
+            <Input
+              value={formData.name}
+              onChange={(e) => updateForm("name", e.target.value)}
+              placeholder="Enter agent name"
+            />
+          </div>
+
+          <div>
+            <Label>Description</Label>
+            <Textarea
+              value={formData.description}
+              onChange={(e) => updateForm("description", e.target.value)}
+              placeholder="Describe the agent's purpose"
+            />
+          </div>
+
+          <div>
+            <Label>Agent Type</Label>
+            <Select
+              value={formData.type}
+              onValueChange={(value) => updateForm("type", value)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(AGENT_TYPES).map(([type, config]) => (
+                  <SelectItem key={type} value={type}>
+                    <div className="flex flex-col">
+                      <span>{config.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {config.description}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: "Skills & Capabilities",
+      content: (
+        <div className="space-y-6">
+          {/* Skills Section */}
+          <div className="space-y-4">
+            <Label>Skills</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Skill name"
+                value={newSkill.name}
+                onChange={(e) => setNewSkill(prev => ({
+                  ...prev,
+                  name: e.target.value
+                }))}
+              />
+              <Select
+                value={newSkill.proficiency}
+                onValueChange={(value) => setNewSkill(prev => ({
+                  ...prev,
+                  proficiency: value
+                }))}
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="beginner">Beginner</SelectItem>
+                  <SelectItem value="intermediate">Intermediate</SelectItem>
+                  <SelectItem value="expert">Expert</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button type="button" onClick={addSkill}>
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {formData.skills.map(skill => (
+                <Badge
+                  key={skill.name}
+                  variant="secondary"
+                  className="flex items-center gap-2"
+                >
+                  {skill.name} ({skill.proficiency})
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0"
+                    onClick={() => removeSkill(skill.name)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          {/* Capabilities Section */}
+          <div className="space-y-4">
+            <Label>Capabilities</Label>
+            <div className="flex flex-wrap gap-2">
+              {AGENT_TYPES[formData.type].capabilities.map(capability => (
+                <Button
+                  key={capability}
+                  variant={formData.capabilities.includes(capability) ? "default" : "outline"}
+                  onClick={() => {
+                    updateForm("capabilities", 
+                      formData.capabilities.includes(capability)
+                        ? formData.capabilities.filter(c => c !== capability)
+                        : [...formData.capabilities, capability]
+                    );
+                  }}
+                >
+                  {capability.replace('_', ' ')}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: "Resource Access",
+      content: (
+        <div className="space-y-6">
+          <div className="bg-muted/50 p-4 rounded-lg">
+            <div className="flex items-center gap-2 text-sm">
+              <ShieldCheck className="h-4 w-4" />
+              Select resources this agent can access
+            </div>
+          </div>
+
+          {availableResources.length === 0 ? (
+            <div className="text-center p-8 text-muted-foreground">
+              No resources available. Create resources first.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {availableResources.map(resource => (
+                <div
+                  key={resource._id}
+                  className="flex items-center gap-4 p-4 border rounded-lg hover:bg-accent cursor-pointer"
+                  onClick={() => toggleResource(resource._id)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={formData.selectedResources.includes(resource._id)}
+                    onChange={() => toggleResource(resource._id)}
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium">{resource.name}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {resource.type}
+                    </div>
+                  </div>
+                  <Badge>
+                    {Object.keys(resource.config || {}).length} configurations
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+  ];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Bot className="h-5 w-5" />
+            Create New Agent
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="mb-4">
+          <div className="flex justify-between mb-8">
+            {steps.map((step, index) => (
+              <div
+                key={index}
+                className={`flex-1 text-center ${
+                  index < steps.length - 1 ? 'border-r border-border' : ''
+                }`}
+              >
+                <div
+                  className={`text-sm font-medium ${
+                    currentStep === index
+                      ? 'text-primary'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  Step {index + 1}
+                </div>
+                <div
+                  className={`text-xs ${
+                    currentStep === index
+                      ? 'text-primary'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  {step.title}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {steps[currentStep].content}
+        </div>
+
+        <DialogFooter>
+          <div className="flex justify-between w-full">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => currentStep > 0 && setCurrentStep(current => current - 1)}
+              disabled={currentStep === 0}
+            >
+              Previous
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              {currentStep < steps.length - 1 ? (
+                <Button
+                  type="button"
+                  onClick={() => setCurrentStep(current => current + 1)}
+                >
+                  Next
+                </Button>
+              ) : (
+                <Button type="button" onClick={handleSubmit}>
+                  Create Agent
+                </Button>
+              )}
+            </div>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/agents/AgentForm.jsx
+
+```jsx
+// /frontend/src/components/agents/AgentForm.jsx
+import React, { useState } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { X } from "lucide-react";
+
+export function AgentForm({ resources, onSubmit, onCancel }) {
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    type: 'task',
+    skills: [],
+    capabilities: [],
+    config: {
+      maxConcurrentTasks: 1,
+      timeout: 30000,
+      retryAttempts: 3
+    }
+  });
+
+  const [newSkill, setNewSkill] = useState({
+    name: '',
+    proficiency: 'intermediate',
+    description: ''
+  });
+
+  const handleChange = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleConfigChange = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      config: {
+        ...prev.config,
+        [field]: value
+      }
+    }));
+  };
+
+  const addSkill = () => {
+    if (newSkill.name) {
+      setFormData(prev => ({
+        ...prev,
+        skills: [...prev.skills, { ...newSkill }]
+      }));
+      setNewSkill({
+        name: '',
+        proficiency: 'intermediate',
+        description: ''
+      });
+    }
+  };
+
+  const removeSkill = (skillName) => {
+    setFormData(prev => ({
+      ...prev,
+      skills: prev.skills.filter(skill => skill.name !== skillName)
+    }));
+  };
+
+  const toggleCapability = (capability) => {
+    setFormData(prev => ({
+      ...prev,
+      capabilities: prev.capabilities.includes(capability)
+        ? prev.capabilities.filter(c => c !== capability)
+        : [...prev.capabilities, capability]
+    }));
+  };
+
+  return (
+    <Dialog open={true} onOpenChange={onCancel}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Create New Agent</DialogTitle>
+        </DialogHeader>
+        
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit(formData);
+        }} className="space-y-6">
+          {/* Basic Information */}
+          <div className="space-y-4">
+            <div>
+              <Label>Name</Label>
+              <Input
+                value={formData.name}
+                onChange={(e) => handleChange('name', e.target.value)}
+                required
+              />
+            </div>
+
+            <div>
+              <Label>Description</Label>
+              <Textarea
+                value={formData.description}
+                onChange={(e) => handleChange('description', e.target.value)}
+              />
+            </div>
+
+            <div>
+              <Label>Type</Label>
+              <Select
+                value={formData.type}
+                onValueChange={(value) => handleChange('type', value)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="task">Task Agent</SelectItem>
+                  <SelectItem value="assistant">Assistant Agent</SelectItem>
+                  <SelectItem value="system">System Agent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Skills */}
+          <div className="space-y-4">
+            <Label>Skills</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Skill name"
+                value={newSkill.name}
+                onChange={(e) => setNewSkill(prev => ({
+                  ...prev,
+                  name: e.target.value
+                }))}
+              />
+              <Select
+                value={newSkill.proficiency}
+                onValueChange={(value) => setNewSkill(prev => ({
+                  ...prev,
+                  proficiency: value
+                }))}
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="beginner">Beginner</SelectItem>
+                  <SelectItem value="intermediate">Intermediate</SelectItem>
+                  <SelectItem value="expert">Expert</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button type="button" onClick={addSkill}>
+                Add Skill
+              </Button>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {formData.skills.map(skill => (
+                <Badge
+                  key={skill.name}
+                  variant="secondary"
+                  className="flex items-center gap-2"
+                >
+                  {skill.name} ({skill.proficiency})
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0"
+                    onClick={() => removeSkill(skill.name)}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          {/* Capabilities */}
+          <div className="space-y-4">
+            <Label>Capabilities</Label>
+            <div className="flex flex-wrap gap-2">
+              {['file_access', 'github_access', 'command_execution', 'api_access'].map(capability => (
+                <Button
+                  key={capability}
+                  type="button"
+                  variant={formData.capabilities.includes(capability) ? "default" : "outline"}
+                  onClick={() => toggleCapability(capability)}
+                >
+                  {capability.replace('_', ' ')}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {/* Configuration */}
+          <div className="space-y-4">
+            <Label>Configuration</Label>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Label>Max Concurrent Tasks</Label>
+                <Input
+                  type="number"
+                  value={formData.config.maxConcurrentTasks}
+                  onChange={(e) => handleConfigChange('maxConcurrentTasks', parseInt(e.target.value))}
+                  min="1"
+                />
+              </div>
+              <div>
+                <Label>Timeout (ms)</Label>
+                <Input
+                  type="number"
+                  value={formData.config.timeout}
+                  onChange={(e) => handleConfigChange('timeout', parseInt(e.target.value))}
+                  min="1000"
+                  step="1000"
+                />
+              </div>
+              <div>
+                <Label>Retry Attempts</Label>
+                <Input
+                  type="number"
+                  value={formData.config.retryAttempts}
+                  onChange={(e) => handleConfigChange('retryAttempts', parseInt(e.target.value))}
+                  min="0"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="submit">
+              Create Agent
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/agents/AgentList.jsx
+
+```jsx
+// /frontend/src/components/agents/AgentList.jsx
+import React from 'react';
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { MoreVertical, Play, Pause, Trash2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+export function AgentList({ agents, onSelect, selectedAgent, onUpdate }) {
+  const handleStatusChange = async (agentId, newStatus) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/agents/${agentId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      if (response.ok) {
+        onUpdate();
+      }
+    } catch (error) {
+      console.error('Error updating agent status:', error);
+    }
+  };
+
+  const handleDeleteAgent = async (agentId) => {
+    if (!confirm('Are you sure you want to delete this agent?')) return;
+
+    try {
+      const response = await fetch(`http://localhost:3000/api/agents/${agentId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        onUpdate();
+        if (selectedAgent?._id === agentId) {
+          onSelect(null);
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting agent:', error);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'available':
+        return 'bg-green-500';
+      case 'busy':
+        return 'bg-yellow-500';
+      case 'offline':
+        return 'bg-gray-500';
+      default:
+        return 'bg-gray-500';
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {agents.map(agent => (
+        <Card
+          key={agent._id}
+          className={`p-4 cursor-pointer hover:bg-accent transition-colors ${
+            selectedAgent?._id === agent._id ? 'border-primary' : ''
+          }`}
+          onClick={() => onSelect(agent)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-2 h-2 rounded-full ${getStatusColor(agent.status)}`} />
+              <div>
+                <h3 className="font-medium">{agent.name}</h3>
+                <p className="text-sm text-muted-foreground">{agent.type}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                {agent.capabilities.map(capability => (
+                  <Badge key={capability} variant="secondary" className="text-xs">
+                    {capability}
+                  </Badge>
+                ))}
+              </div>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {agent.status === 'offline' ? (
+                    <DropdownMenuItem
+                      onClick={() => handleStatusChange(agent._id, 'available')}
+                    >
+                      <Play className="h-4 w-4 mr-2" />
+                      Start Agent
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem
+                      onClick={() => handleStatusChange(agent._id, 'offline')}
+                    >
+                      <Pause className="h-4 w-4 mr-2" />
+                      Stop Agent
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => handleDeleteAgent(agent._id)}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Agent
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+
+          {agent.description && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {agent.description}
+            </p>
+          )}
+
+          <div className="mt-2 flex flex-wrap gap-1">
+            {agent.skills.map(skill => (
+              <Badge
+                key={skill.name}
+                variant="outline"
+                className="text-xs"
+              >
+                {skill.name} ({skill.proficiency})
+              </Badge>
+            ))}
+          </div>
+        </Card>
+      ))}
+
+      {agents.length === 0 && (
+        <div className="text-center p-8 text-muted-foreground">
+          No agents created yet
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+# frontend/src/components/agents/AgentManager.jsx
+
+```jsx
+// /frontend/src/components/agents/AgentManager.jsx
+import React, { useState, useEffect } from 'react';
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Plus, Bot } from "lucide-react";
+import { AgentList } from './AgentList';
+import { AgentMetrics } from './AgentMetrics';
+import { AddAgentDialog } from './AddAgentDialog';
+
+export function AgentManager() {
+  const [agents, setAgents] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch both agents and resources on component mount
+  useEffect(() => {
+    Promise.all([
+      fetchAgents(),
+      fetchResources()
+    ]).finally(() => setLoading(false));
+  }, []);
+
+  const fetchAgents = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/agents');
+      if (!response.ok) throw new Error('Failed to fetch agents');
+      const data = await response.json();
+      setAgents(data);
+    } catch (error) {
+      console.error('Error fetching agents:', error);
+      setError('Failed to load agents');
+    }
+  };
+
+  const fetchResources = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/resources');
+      if (!response.ok) throw new Error('Failed to fetch resources');
+      const data = await response.json();
+      setResources(data);
+    } catch (error) {
+      console.error('Error fetching resources:', error);
+      setError('Failed to load resources');
+    }
+  };
+
+  const handleCreateAgent = async (agentData) => {
+    try {
+      // Get the resource details for each selected resource
+      const selectedResources = resources.filter(r => 
+        agentData.selectedResources.includes(r._id)
+      );
+  
+      // Format the agent data for the API
+      const formattedData = {
+        name: agentData.name,
+        description: agentData.description,
+        type: agentData.type,
+        skills: agentData.skills,
+        capabilities: agentData.capabilities,
+        resources: selectedResources.map(resource => ({
+          resourceId: resource._id,
+          type: resource.type, // Include the resource type
+          permissions: 'full'  // Or use a more granular permission system
+        })),
+        status: 'available',
+        config: {
+          maxConcurrentTasks: 1,
+          timeout: 30000,
+          retryAttempts: 3
+        }
+      };
+  
+      const response = await fetch('http://localhost:3000/api/agents', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formattedData),
+      });
+  
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create agent');
+      }
+  
+      await fetchAgents(); // Refresh the agents list
+      setIsCreating(false);
+    } catch (error) {
+      console.error('Error creating agent:', error);
+      setError(error.message);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <p className="mt-2 text-sm text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      {error && (
+        <div className="bg-destructive/10 text-destructive px-4 py-2 rounded-md text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Agents</h1>
+          <p className="text-muted-foreground">
+            Create and manage AI agents with specific capabilities
+          </p>
+        </div>
+        <Button 
+          onClick={() => setIsCreating(true)}
+          className="flex items-center gap-2"
+        >
+          <Plus className="h-4 w-4" />
+          Create Agent
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        {/* Main Agent List - Takes up 2 columns */}
+        <div className="col-span-2">
+          <Card>
+            <CardContent className="p-6">
+              <AgentList 
+                agents={agents}
+                onSelect={setSelectedAgent}
+                selectedAgent={selectedAgent}
+                onUpdate={fetchAgents}
+              />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Agent Details & Metrics - Takes up 1 column */}
+        <div className="space-y-4">
+          {selectedAgent ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Bot className="h-5 w-5" />
+                    Agent Details
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div>
+                      <span className="text-sm font-medium">Name:</span>
+                      <span className="ml-2">{selectedAgent.name}</span>
+                    </div>
+                    <div>
+                      <span className="text-sm font-medium">Type:</span>
+                      <span className="ml-2">{selectedAgent.type}</span>
+                    </div>
+                    <div>
+                      <span className="text-sm font-medium">Status:</span>
+                      <span className="ml-2">{selectedAgent.status}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <AgentMetrics agentId={selectedAgent._id} />
+                </CardContent>
+              </Card>
+            </>
+          ) : (
+            <Card>
+              <CardContent className="p-6 text-center text-muted-foreground">
+                Select an agent to view details
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+
+      <AddAgentDialog
+        open={isCreating}
+        onOpenChange={setIsCreating}
+        onSubmit={handleCreateAgent}
+        availableResources={resources}
+      />
+    </div>
+  );
+}
+```
+
+# frontend/src/components/agents/AgentMetrics.jsx
+
+```jsx
+// /frontend/src/components/agents/AgentMetrics.jsx
+import React, { useState, useEffect } from 'react';
+import { Card } from "@/components/ui/card";
+import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
+import 'react-circular-progressbar/dist/styles.css';
+import { formatDistance } from 'date-fns';
+
+export function AgentMetrics({ agentId }) {
+  const [metrics, setMetrics] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchMetrics();
+    const interval = setInterval(fetchMetrics, 30000); // Refresh every 30 seconds
+    return () => clearInterval(interval);
+  }, [agentId]);
+
+  const fetchMetrics = async () => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/agents/${agentId}/metrics`);
+      if (response.ok) {
+        const data = await response.json();
+        setMetrics(data);
+      }
+    } catch (error) {
+      console.error('Error fetching metrics:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (isLoading) {
+    return <div className="p-4 text-center">Loading metrics...</div>;
+  }
+
+  if (!metrics) {
+    return <div className="p-4 text-center">No metrics available</div>;
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <Card className="p-4">
+        <div className="w-20 h-20 mx-auto">
+          <CircularProgressbar
+            value={metrics.successRate}
+            text={`${metrics.successRate}%`}
+            styles={buildStyles({
+              pathColor: `rgba(62, 152, 199, ${metrics.successRate / 100})`,
+              textColor: '#888',
+              trailColor: '#d6d6d6'
+            })}
+          />
+        </div>
+        <p className="text-center mt-2 text-sm font-medium">Success Rate</p>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-center">
+          <p className="text-2xl font-bold">{metrics.tasksCompleted}</p>
+          <p className="text-sm text-muted-foreground">Tasks Completed</p>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-center">
+          <p className="text-2xl font-bold">
+            {Math.round(metrics.averageTaskDuration / 1000)}s
+          </p>
+          <p className="text-sm text-muted-foreground">Avg Task Duration</p>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-center">
+          <p className="text-sm font-medium">Last Active</p>
+          <p className="text-muted-foreground">
+            {formatDistance(new Date(metrics.lastActiveTime), new Date(), { addSuffix: true })}
+          </p>
+        </div>
+      </Card>
+    </div>
+  );
+}
+```
+
+# frontend/src/components/agents/AgentResources.jsx
+
+```jsx
+// /frontend/src/components/agents/AgentResources.jsx
+import React, { useState } from 'react';
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Plus, X, Github, FileText, Terminal } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+export function AgentResources({ agent, resources, onUpdate }) {
+  const [isAddingResource, setIsAddingResource] = useState(false);
+  const [selectedResource, setSelectedResource] = useState(null);
+
+  const getResourceIcon = (type) => {
+    switch (type) {
+      case 'github':
+        return <Github className="h-4 w-4" />;
+      case 'filesystem':
+        return <FileText className="h-4 w-4" />;
+      case 'command':
+        return <Terminal className="h-4 w-4" />;
+      default:
+        return null;
+    }
+  };
+
+  const handleAddResource = async () => {
+    if (!selectedResource) return;
+
+    try {
+      const response = await fetch(`http://localhost:3000/api/agents/${agent._id}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          resourceId: selectedResource
+        }),
+      });
+
+      if (response.ok) {
+        onUpdate();
+        setIsAddingResource(false);
+        setSelectedResource(null);
+      }
+    } catch (error) {
+      console.error('Error adding resource:', error);
+    }
+  };
+
+  const handleRemoveResource = async (resourceId) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/agents/${agent._id}/resources/${resourceId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        onUpdate();
+      }
+    } catch (error) {
+      console.error('Error removing resource:', error);
+    }
+  };
+
+  // Filter out resources that are already assigned to the agent
+  const availableResources = resources.filter(resource => 
+    !agent.resources.some(r => r._id === resource._id)
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-medium">Assigned Resources</h3>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setIsAddingResource(true)}
+          className="flex items-center gap-2"
+        >
+          <Plus className="h-4 w-4" />
+          Add Resource
+        </Button>
+      </div>
+
+      <div className="space-y-2">
+        {agent.resources.map(resource => (
+          <Card key={resource._id} className="p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {getResourceIcon(resource.type)}
+              <div>
+                <p className="text-sm font-medium">{resource.name}</p>
+                <p className="text-xs text-muted-foreground">{resource.type}</p>
+                // /frontend/src/components/agents/AgentResources.jsx (continued)
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {resource.config && (
+                <Badge variant="secondary" className="text-xs">
+                  {Object.keys(resource.config).length} configurations
+                </Badge>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => handleRemoveResource(resource._id)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </Card>
+        ))}
+
+        {agent.resources.length === 0 && (
+          <div className="text-center p-4 text-sm text-muted-foreground">
+            No resources assigned
+          </div>
+        )}
+      </div>
+
+      {/* Resource Assignment Dialog */}
+      <Dialog open={isAddingResource} onOpenChange={setIsAddingResource}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Resource</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <Select
+              value={selectedResource}
+              onValueChange={setSelectedResource}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a resource" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableResources.map(resource => (
+                  <SelectItem key={resource._id} value={resource._id}>
+                    <div className="flex items-center gap-2">
+                      {getResourceIcon(resource.type)}
+                      <span>{resource.name}</span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsAddingResource(false);
+                  setSelectedResource(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleAddResource}>
+                Add Resource
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+```
+
 # frontend/src/components/ChatMessage.jsx
 
 ```jsx
@@ -2070,15 +4924,10 @@ export default ChatMessage;
 # frontend/src/components/EnvironmentCheck.jsx
 
 ```jsx
+// /frontend/src/components/EnvironmentCheck.jsx
 import React, { useState, useEffect } from 'react';
 import { AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 
@@ -2121,20 +4970,18 @@ const EnvironmentCheck = () => {
         }
       }));
 
-      // Check Environment Variables
-      const envVars = {
-        'PORT': process.env.PORT || '3000 (default)',
-        'OLLAMA_HOST': process.env.OLLAMA_HOST || 'http://localhost:11434 (default)',
-        'MODEL_NAME': process.env.MODEL_NAME || 'deepseek-coder:6.7b (default)',
-        'MONGODB_URI': process.env.MONGODB_URI ? 'Set' : 'Not Set',
-        'MONGODB_DB_NAME': process.env.MONGODB_DB_NAME || 'deepseek-chat (default)'
-      };
-
+      // Check Environment Variables from backend
+      const envRes = await fetch('http://localhost:3000/api/env-check');
+      const envData = await envRes.json();
       setChecks(prev => ({
         ...prev,
         environment: {
-          status: 'success',
-          details: envVars
+          status: envData.status === 'ok' ? 'success' : 'error',
+          details: {
+            variables: envData.envVars,
+            message: envData.message,
+            missingVars: envData.missingVars
+          }
         }
       }));
 
@@ -2209,13 +5056,13 @@ const EnvironmentCheck = () => {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Ollama Check */}
+        {/* Environment Variables */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            {getStatusIcon(checks.ollama.status)}
-            <h3 className="font-semibold">Ollama Connection</h3>
+            {getStatusIcon(checks.environment.status)}
+            <h3 className="font-semibold">Environment Variables</h3>
           </div>
-          {renderDetails(checks.ollama)}
+          {renderDetails(checks.environment)}
         </div>
 
         {/* MongoDB Check */}
@@ -2227,13 +5074,13 @@ const EnvironmentCheck = () => {
           {renderDetails(checks.mongodb)}
         </div>
 
-        {/* Environment Variables */}
+        {/* Ollama Check */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            {getStatusIcon(checks.environment.status)}
-            <h3 className="font-semibold">Environment Variables</h3>
+            {getStatusIcon(checks.ollama.status)}
+            <h3 className="font-semibold">Ollama Connection</h3>
           </div>
-          {renderDetails(checks.environment)}
+          {renderDetails(checks.ollama)}
         </div>
       </CardContent>
     </Card>
@@ -2241,6 +5088,63 @@ const EnvironmentCheck = () => {
 };
 
 export default EnvironmentCheck;
+```
+
+# frontend/src/components/Header.jsx
+
+```jsx
+// /frontend/src/components/Header.jsx
+import { Button } from "@/components/ui/button";
+import { Moon, Sun, Settings } from "lucide-react";
+import { Menu } from "./Menu";
+import { ModelSelector } from "./ModelSelector";
+import EnvironmentCheck from "./EnvironmentCheck";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useState } from "react";
+
+export function Header({ isDarkMode, onDarkModeToggle, onModelChange }) {
+  const [showEnvCheck, setShowEnvCheck] = useState(false);
+
+  return (
+    <div className="flex items-center justify-between p-4 border-b">
+      <div className="flex items-center gap-4">
+        <Menu />
+        <ModelSelector onModelChange={onModelChange} />
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setShowEnvCheck(true)}
+          title="Environment Status"
+        >
+          <Settings className="w-5 h-5" />
+        </Button>
+        <Button variant="ghost" size="icon" onClick={onDarkModeToggle}>
+          {isDarkMode ? (
+            <Sun className="w-5 h-5" />
+          ) : (
+            <Moon className="w-5 h-5" />
+          )}
+        </Button>
+      </div>
+
+      <Dialog open={showEnvCheck} onOpenChange={setShowEnvCheck}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Environment Status</DialogTitle>
+          </DialogHeader>
+          <EnvironmentCheck />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
 ```
 
 # frontend/src/components/Menu.jsx
@@ -2282,7 +5186,7 @@ export function Menu({ onNewChat }) {
 
 ```jsx
 // /frontend/src/components/ModelSelector.jsx
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Select,
   SelectContent,
@@ -2291,17 +5195,71 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const models = [
-  {
-    name: "Local GPT",
-    description: "Powered by Ollama - Optimized for chat and coding",
-    value: "deepseek-coder:6.7b",
-  }
-];
+export function ModelSelector({ onModelChange = () => {} }) {
+  const [models, setModels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedModel, setSelectedModel] = useState(null);
 
-export function ModelSelector() {
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch('http://localhost:3000/api/models');
+        if (!response.ok) {
+          throw new Error('Failed to fetch models');
+        }
+        const data = await response.json();
+        const formattedModels = data.map(model => ({
+          name: model.name,
+          description: `${model.size ? `Size: ${(model.size / 1e9).toFixed(1)}GB` : ''}`,
+          value: model.name
+        }));
+        setModels(formattedModels);
+        
+        // If we have models, set the first one as default
+        if (formattedModels.length > 0) {
+          setSelectedModel(formattedModels[0].value);
+          onModelChange(formattedModels[0].value);
+        }
+        
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching models:', error);
+        setError(error.message);
+        setLoading(false);
+      }
+    };
+
+    fetchModels();
+  }, []); // Remove onModelChange from dependencies
+
+  const handleModelChange = (value) => {
+    setSelectedModel(value);
+    onModelChange(value);
+  };
+
+  if (loading) {
+    return (
+      <Select disabled>
+        <SelectTrigger className="w-[200px] bg-background">
+          <SelectValue placeholder="Loading models..." />
+        </SelectTrigger>
+      </Select>
+    );
+  }
+
+  if (error) {
+    return (
+      <Select disabled>
+        <SelectTrigger className="w-[200px] bg-background">
+          <SelectValue placeholder="Error loading models" />
+        </SelectTrigger>
+      </Select>
+    );
+  }
+
   return (
-    <Select defaultValue={models[0].value}>
+    <Select value={selectedModel} onValueChange={handleModelChange}>
       <SelectTrigger className="w-[200px] bg-background">
         <SelectValue placeholder="Select a model" />
       </SelectTrigger>
@@ -2310,12 +5268,159 @@ export function ModelSelector() {
           <SelectItem key={model.value} value={model.value}>
             <div className="flex flex-col">
               <span>{model.name}</span>
-              <span className="text-xs text-muted-foreground">{model.description}</span>
+              {model.description && (
+                <span className="text-xs text-muted-foreground">
+                  {model.description}
+                </span>
+              )}
             </div>
           </SelectItem>
         ))}
       </SelectContent>
     </Select>
+  );
+}
+```
+
+# frontend/src/components/monitor/SystemMonitor.jsx
+
+```jsx
+// /frontend/src/components/monitor/SystemMonitor.jsx
+import React, { useState, useEffect } from 'react';
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { formatDistanceToNow } from 'date-fns';
+
+export function SystemMonitor() {
+  const [agents, setAgents] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [agentsRes, tasksRes] = await Promise.all([
+          fetch('http://localhost:3000/api/agents'),
+          fetch('http://localhost:3000/api/tasks')
+        ]);
+
+        const [agentsData, tasksData] = await Promise.all([
+          agentsRes.json(),
+          tasksRes.json()
+        ]);
+
+        setAgents(agentsData);
+        setTasks(tasksData);
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 5000); // Update every 5 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-4 p-4">
+      {/* Active Agents */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Active Agents</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {agents.map(agent => (
+              <div key={agent._id} className="flex items-center justify-between p-2 border rounded">
+                <div>
+                  <h3 className="font-medium">{agent.name}</h3>
+                  <p className="text-sm text-muted-foreground">{agent.type}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge>{agent.status}</Badge>
+                  <div className="text-xs text-muted-foreground">
+                    Tasks: {agent.metrics?.tasksCompleted || 0}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Active Tasks */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Active Tasks</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {tasks.map(task => (
+              <div key={task._id} className="p-2 border rounded">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium">{task.title}</h3>
+                  <Badge>{task.status}</Badge>
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
+                {task.assignedTo && (
+                  <div className="text-xs text-muted-foreground mt-2">
+                    Assigned to: {task.assignedTo.name}
+                  </div>
+                )}
+                <div className="text-xs text-muted-foreground mt-1">
+                  Created {formatDistanceToNow(new Date(task.createdAt), { addSuffix: true })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+```
+
+# frontend/src/components/Navigation.jsx
+
+```jsx
+// /frontend/src/components/Navigation.jsx
+import { useEffect } from 'react';
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MessageSquare, Bot, Database } from "lucide-react";
+
+export function Navigation({ activeTab, onChange }) {
+  useEffect(() => {
+    // Update the document title based on the active tab
+    const titles = {
+      chat: "Chat - LocalGPT",
+      agents: "Agents - LocalGPT",
+      resources: "Resources - LocalGPT"
+    };
+    document.title = titles[activeTab] || "LocalGPT";
+  }, [activeTab]);
+
+  return (
+    <Tabs value={activeTab} onValueChange={onChange} className="w-full">
+      <TabsList className="grid w-full grid-cols-3">
+        <TabsTrigger value="chat" className="flex items-center gap-2">
+          <MessageSquare className="w-4 h-4" />
+          Chat
+        </TabsTrigger>
+        <TabsTrigger value="agents" className="flex items-center gap-2">
+          <Bot className="w-4 h-4" />
+          Agents
+        </TabsTrigger>
+        <TabsTrigger value="resources" className="flex items-center gap-2">
+          <Database className="w-4 h-4" />
+          Resources
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
   );
 }
 ```
@@ -3841,17 +6946,759 @@ export function RequirementsTab({ settings, setSettings }) {
   }
 ```
 
+# frontend/src/components/resources/AddResourceDialog.jsx
+
+```jsx
+// /frontend/src/components/resources/AddResourceDialog.jsx
+import React, { useState } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { Github, FileText, Terminal, Globe } from "lucide-react";
+
+const RESOURCE_TYPES = {
+    
+  github: {
+    icon: Github,
+    title: "GitHub Access",
+    description: "Enable agent to interact with GitHub repositories",
+    fields: [
+      {
+        name: "token",
+        label: "Personal Access Token",
+        type: "password",
+        description: "GitHub personal access token with required permissions"
+      },
+      {
+        name: "repositories",
+        label: "Repository Access",
+        type: "multiInput",
+        description: "Enter repository URLs (one per line)",
+        placeholder: "owner/repo"
+      }
+    ]
+  },
+  web: {  
+    icon: Globe,
+    title: "Web Access",
+    description: "Enable agent to perform web searches and access web content",
+    fields: [
+      {
+        name: "permissions",
+        label: "Permissions",
+        type: "checkboxGroup",
+        options: ["read"],
+        description: "Select allowed operations"
+      },
+      {
+        name: "allowedDomains",
+        label: "Allowed Domains",
+        type: "multiInput",
+        description: "Enter allowed domains (optional, one per line)",
+        placeholder: "example.com"
+      }
+    ]
+  },
+  filesystem: {
+    icon: FileText,
+    title: "File System Access",
+    description: "Enable agent to read/write local files",
+    fields: [
+      {
+        name: "basePath",
+        label: "Base Path",
+        type: "text",
+        description: "Root directory for file system access"
+      },
+      {
+        name: "permissions",
+        label: "Permissions",
+        type: "checkboxGroup",
+        options: ["read", "write", "execute"],
+        description: "Select allowed operations"
+      }
+    ]
+  },
+  command: {
+    icon: Terminal,
+    title: "Command Execution",
+    description: "Enable agent to execute system commands",
+    warning: "⚠️ Grant command execution carefully",
+    fields: [
+      {
+        name: "allowedCommands",
+        label: "Allowed Commands",
+        type: "multiInput",
+        description: "Enter allowed commands (one per line)",
+        placeholder: "command [args...]"
+      }
+    ]
+  }
+};
+
+export function AddResourceDialog({ open, onOpenChange, onSubmit }) {
+  const [selectedType, setSelectedType] = useState('github');
+  const [formData, setFormData] = useState({});
+
+  const handleInputChange = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit({
+      type: selectedType,
+      ...formData
+    });
+  };
+
+  const renderField = (field) => {
+    switch (field.type) {
+      case 'text':
+      case 'password':
+        return (
+          <div className="space-y-2" key={field.name}>
+            <Label>{field.label}</Label>
+            <Input
+              type={field.type}
+              placeholder={field.placeholder}
+              value={formData[field.name] || ''}
+              onChange={(e) => handleInputChange(field.name, e.target.value)}
+            />
+            {field.description && (
+              <p className="text-xs text-muted-foreground">{field.description}</p>
+            )}
+          </div>
+        );
+
+      case 'multiInput':
+        return (
+          <div className="space-y-2" key={field.name}>
+            <Label>{field.label}</Label>
+            <textarea
+              className="w-full h-24 p-2 border rounded-md resize-none"
+              placeholder={field.placeholder}
+              value={formData[field.name] || ''}
+              onChange={(e) => handleInputChange(field.name, e.target.value)}
+            />
+            {field.description && (
+              <p className="text-xs text-muted-foreground">{field.description}</p>
+            )}
+          </div>
+        );
+
+      case 'checkboxGroup':
+        return (
+          <div className="space-y-2" key={field.name}>
+            <Label>{field.label}</Label>
+            <div className="flex gap-4">
+              {field.options.map(option => (
+                <label key={option} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={formData[field.name]?.includes(option)}
+                    onChange={(e) => {
+                      const current = formData[field.name] || [];
+                      const updated = e.target.checked
+                        ? [...current, option]
+                        : current.filter(p => p !== option);
+                      handleInputChange(field.name, updated);
+                    }}
+                  />
+                  {option}
+                </label>
+              ))}
+            </div>
+            {field.description && (
+              <p className="text-xs text-muted-foreground">{field.description}</p>
+            )}
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  const ResourceIcon = RESOURCE_TYPES[selectedType]?.icon;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Add New Resource</DialogTitle>
+        </DialogHeader>
+
+        <Tabs value={selectedType} onValueChange={setSelectedType}>
+        <TabsList className="grid w-full grid-cols-4 gap-4">  {/* Added gap-4 */}
+  {Object.entries(RESOURCE_TYPES).map(([type, config]) => {
+    const Icon = config.icon;
+    return (
+      <TabsTrigger 
+        key={type} 
+        value={type} 
+        className="flex items-center justify-center gap-2 px-3" // Added justify-center and px-3
+      >
+        <Icon className="h-4 w-4" />
+        <span className="truncate">{config.title}</span>  {/* Added truncate */}
+      </TabsTrigger>
+    );
+  })}
+</TabsList>
+
+          {Object.entries(RESOURCE_TYPES).map(([type, config]) => (
+            <TabsContent key={type} value={type}>
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="flex items-center gap-2 text-lg font-semibold">
+                  <config.icon className="h-5 w-5" />
+                  {config.title}
+                </div>
+                <p className="text-sm text-muted-foreground">{config.description}</p>
+                
+                {config.warning && (
+                  <div className="bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 p-3 rounded-md text-sm">
+                    {config.warning}
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {config.fields.map(field => renderField(field))}
+                </div>
+
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">Create Resource</Button>
+                </DialogFooter>
+              </form>
+            </TabsContent>
+          ))}
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/resources/ResourceForm.jsx
+
+```jsx
+// /frontend/src/components/resources/ResourceForm.jsx
+import React, { useState } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+const RESOURCE_CONFIGS = {
+    web: {
+      fields: [
+        { name: 'name', label: 'Resource Name', type: 'text' },
+        { name: 'permissions', label: 'Permissions', type: 'checkbox',
+          options: ['read'] },
+        { name: 'allowedDomains', label: 'Allowed Domains', type: 'textarea',
+          description: 'Enter domains (one per line)' }
+      ]
+    },
+    github: {
+      fields: [
+        { name: 'token', label: 'GitHub Token', type: 'password' },
+        { name: 'repoUrl', label: 'Repository URL', type: 'text' },
+        { name: 'permissions', label: 'Permissions', type: 'select', 
+          options: ['read', 'write', 'admin'] }
+      ]
+    },
+    filesystem: {
+      fields: [
+        { name: 'path', label: 'Base Path', type: 'text' },
+        { name: 'permissions', label: 'Permissions', type: 'checkbox',
+          options: ['read', 'write', 'execute'] }
+      ]
+    },
+    command: {
+      fields: [
+        { name: 'command', label: 'Command', type: 'text' },
+        { name: 'arguments', label: 'Allowed Arguments', type: 'textarea' },
+        { name: 'description', label: 'Description', type: 'textarea' }
+      ]
+    }
+  };
+
+export function ResourceForm({ type, onSubmit, onCancel }) {
+  const [formData, setFormData] = useState({});
+
+  const handleChange = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit({
+      type,
+      config: formData
+    });
+  };
+
+  const renderField = (field) => {
+    switch (field.type) {
+      case 'text':
+      case 'password':
+        return (
+          <Input
+            type={field.type}
+            value={formData[field.name] || ''}
+            onChange={(e) => handleChange(field.name, e.target.value)}
+          />
+        );
+
+      case 'textarea':
+        return (
+          <Textarea
+            value={formData[field.name] || ''}
+            onChange={(e) => handleChange(field.name, e.target.value)}
+          />
+        );
+
+      case 'select':
+        return (
+          <select
+            value={formData[field.name] || ''}
+            onChange={(e) => handleChange(field.name, e.target.value)}
+            className="w-full p-2 border rounded"
+          >
+            <option value="">Select...</option>
+            {field.options.map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        );
+
+      case 'checkbox':
+        return (
+          <div className="flex gap-4">
+            {field.options.map(opt => (
+              <label key={opt} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={formData[field.name]?.includes(opt)}
+                  onChange={(e) => {
+                    const current = formData[field.name] || [];
+                    const updated = e.target.checked
+                      ? [...current, opt]
+                      : current.filter(p => p !== opt);
+                    handleChange(field.name, updated);
+                  }}
+                />
+                {opt}
+              </label>
+            ))}
+          </div>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <Dialog open={true} onOpenChange={onCancel}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add {type} Resource</DialogTitle>
+        </DialogHeader>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {RESOURCE_CONFIGS[type].fields.map(field => (
+            <div key={field.name} className="space-y-2">
+              <Label>{field.label}</Label>
+              {renderField(field)}
+            </div>
+          ))}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="submit">
+              Create Resource
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/resources/ResourceList.jsx
+
+```jsx
+// /frontend/src/components/resources/ResourceList.jsx
+import React from 'react';
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { MoreVertical, Trash2, Edit } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+export function ResourceList({ resources, onUpdate }) {
+  const handleDeleteResource = async (resourceId) => {
+    if (!confirm('Are you sure you want to delete this resource?')) return;
+
+    try {
+      const response = await fetch(`http://localhost:3000/api/resources/${resourceId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        onUpdate();
+      }
+    } catch (error) {
+      console.error('Error deleting resource:', error);
+    }
+  };
+
+  const getResourceIcon = (type) => {
+    switch (type) {
+      case 'github':
+        return '🔗';
+      case 'filesystem':
+        return '📁';
+      case 'command':
+        return '⌨️';
+      default:
+        return '🔧';
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {resources.map(resource => (
+        <Card key={resource._id} className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">{getResourceIcon(resource.type)}</span>
+              <div>
+                <h3 className="font-medium">{resource.name || resource.type}</h3>
+                <p className="text-sm text-muted-foreground">{resource.type}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {resource.config && (
+                <Badge variant="secondary" className="text-xs">
+                  {Object.keys(resource.config).length} configurations
+                </Badge>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => handleDeleteResource(resource._id)}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Resource
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+
+          {resource.description && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {resource.description}
+            </p>
+          )}
+
+          {resource.config && (
+            <div className="mt-2">
+              <div className="text-sm text-muted-foreground">
+                Configuration:
+              </div>
+              <pre className="mt-1 text-xs bg-muted p-2 rounded-md overflow-x-auto">
+                {JSON.stringify(resource.config, null, 2)}
+              </pre>
+            </div>
+          )}
+        </Card>
+      ))}
+
+      {resources.length === 0 && (
+        <div className="text-center p-8 text-muted-foreground">
+          No resources created yet
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+# frontend/src/components/resources/ResourceManager.jsx
+
+```jsx
+// /frontend/src/components/resources/ResourceManager.jsx
+import React, { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Github, FileText, Terminal, Plus } from "lucide-react"; // Updated imports
+import { ResourceForm } from "./ResourceForm";
+import { ResourceList } from "./ResourceList";
+import { AddResourceDialog } from "./AddResourceDialog";
+import { Globe } from "lucide-react"; // Add Globe icon import
+
+export function ResourceManager() {
+  const [resources, setResources] = useState([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [selectedType, setSelectedType] = useState("github");
+
+  useEffect(() => {
+    fetchResources();
+  }, []);
+
+  const fetchResources = async () => {
+    try {
+      const response = await fetch("http://localhost:3000/api/resources");
+      if (response.ok) {
+        const data = await response.json();
+        setResources(data);
+      }
+    } catch (error) {
+      console.error("Error fetching resources:", error);
+    }
+  };
+
+  const handleCreateResource = async (resourceData) => {
+    try {
+      let formattedData = {
+        type: resourceData.type,
+        name: `${resourceData.type}-${Date.now()}`,
+        config: {},
+      };
+
+      console.log('Incoming resource data:', resourceData);
+
+
+      switch (resourceData.type) {
+        case "github":
+          formattedData.config = {
+            githubToken: resourceData.token,
+            repositories: resourceData.repositories
+              .split("\n")
+              .map((repo) => repo.trim())
+              .filter(Boolean)
+              .map((repo) => ({
+                url: repo,
+                permissions: ["read"], // Default to read access
+              })),
+          };
+          break;
+
+        case "filesystem":
+          formattedData.config = {
+            basePath: resourceData.basePath,
+            allowedPaths: [
+              {
+                path: resourceData.basePath,
+                permissions: resourceData.permissions || ["read"],
+              },
+            ],
+          };
+          break;
+
+        case "command":
+          formattedData.config = {
+            allowedCommands: resourceData.allowedCommands
+              .split("\n")
+              .map((cmd) => cmd.trim())
+              .filter(Boolean)
+              .map((cmd) => ({
+                command: cmd,
+                arguments: [], // Default to no arguments
+                description: `Allowed command: ${cmd}`,
+              })),
+          };
+          break;
+
+          case "web":
+            formattedData.config = {
+              permissions: resourceData.permissions || ["read"],
+              // Only include allowedDomains if specifically restricted
+              ...(resourceData.allowedDomains && {
+                allowedDomains: resourceData.allowedDomains
+                  .split("\n")
+                  .map(domain => domain.trim())
+                  .filter(Boolean)
+              })
+            };
+            break;
+      }
+
+      console.log('Sending formatted data to server:', formattedData);
+
+
+      const response = await fetch("http://localhost:3000/api/resources", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(formattedData),
+      });
+
+      console.log('Response status:', response.status);
+      const responseData = await response.json();
+      console.log('Response data:', responseData);
+  
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to create resource');
+      }
+
+      await fetchResources();
+      setIsCreating(false);
+    } catch (error) {
+      console.error("Error creating resource:", error);
+      // You might want to show this error to the user
+      // setError(error.message);
+    }
+  };
+
+  return (
+    <Card className="w-full max-w-4xl mx-auto">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          Resource Management
+          <Button onClick={() => setIsCreating(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            Add Resource
+          </Button>
+        </CardTitle>
+        <CardDescription>
+          Manage resources that can be used by agents
+        </CardDescription>
+      </CardHeader>
+
+      <CardContent>
+        <Tabs defaultValue="web" onValueChange={setSelectedType}>
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="web" className="flex items-center gap-2">
+              <Globe className="h-4 w-4" />
+              Web
+            </TabsTrigger>
+            <TabsTrigger value="github" className="flex items-center gap-2">
+              <Github className="h-4 w-4" />
+              GitHub
+            </TabsTrigger>
+            <TabsTrigger value="filesystem" className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              File System
+            </TabsTrigger>
+            <TabsTrigger value="command" className="flex items-center gap-2">
+              <Terminal className="h-4 w-4" />
+              Commands
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="web">
+            <ResourceList
+              resources={resources.filter((r) => r.type === "web")}
+              onUpdate={fetchResources}
+            />
+          </TabsContent>
+          <TabsContent value="github">
+            <ResourceList
+              resources={resources.filter((r) => r.type === "github")}
+              onUpdate={fetchResources}
+            />
+          </TabsContent>
+
+          <TabsContent value="filesystem">
+            <ResourceList
+              resources={resources.filter((r) => r.type === "filesystem")}
+              onUpdate={fetchResources}
+            />
+          </TabsContent>
+
+          <TabsContent value="command">
+            <ResourceList
+              resources={resources.filter((r) => r.type === "command")}
+              onUpdate={fetchResources}
+            />
+          </TabsContent>
+        </Tabs>
+
+        {isCreating && (
+          <ResourceForm
+            type={selectedType}
+            onSubmit={handleCreateResource}
+            onCancel={() => setIsCreating(false)}
+          />
+        )}
+      </CardContent>
+      <AddResourceDialog
+        open={isCreating}
+        onOpenChange={setIsCreating}
+        onSubmit={handleCreateResource}
+      />
+    </Card>
+  );
+}
+
+```
+
 # frontend/src/components/Sidebar.jsx
 
 ```jsx
 // /frontend/src/components/Sidebar.jsx
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { PlusCircle, MessageSquare, FolderPlus, MoreVertical, Trash2 } from "lucide-react";
-import { formatDistanceToNow } from 'date-fns';
-import { ProjectSettingsButton } from './projects/ProjectSettings';
-import { ProjectDialog } from './projects/ProjectDialog';
-import { useState } from 'react';
+import {
+  PlusCircle,
+  MessageSquare,
+  FolderPlus,
+  MoreVertical,
+  Trash2,
+} from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { ProjectSettingsButton } from "./projects/ProjectSettings";
+import { ProjectDialog } from "./projects/ProjectDialog";
+import { useState } from "react";
 import { Separator } from "@/components/ui/separator";
 import {
   DropdownMenu,
@@ -3860,161 +7707,1643 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-export function Sidebar({ 
-  chats, 
-  activeChat, 
-  onChatSelect, 
+export function Sidebar({
+  chats,
+  activeChat,
+  onChatSelect,
   onNewChat,
   projects = [],
   activeProject,
   onProjectSelect,
   onProjectSubmit,
-  onDeleteProject, // Add this prop
-  onDeleteChat     // Add this prop
+  onDeleteProject,
+  onDeleteChat,
 }) {
   const [showProjectDialog, setShowProjectDialog] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
 
   return (
-    <div className="w-80 border-r bg-muted/10 p-4 flex flex-col gap-4 h-full">
-      {/* Projects Section */}
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Projects</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setEditingProject(null);
-              setShowProjectDialog(true);
-            }}
-            title="New Project"
-          >
-            <FolderPlus className="h-4 w-4" />
-          </Button>
-        </div>
+    <aside className="flex flex-none w-64 border-r bg-muted/10">
+      <div className="flex flex-col w-full h-full">
+        <div className="flex flex-col gap-2 p-4">
+          {/* Projects Section */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Projects</h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setEditingProject(null);
+                  setShowProjectDialog(true);
+                }}
+                title="New Project"
+              >
+                <FolderPlus className="h-4 w-4" />
+              </Button>
+            </div>
 
-        <ScrollArea className="flex-shrink-0" style={{ maxHeight: '30vh' }}>
-          <div className="space-y-1">
-            {projects.map((project) => (
-              <div key={project._id} className="relative group">
-                <Button
-                  variant={activeProject?._id === project._id ? "secondary" : "ghost"}
-                  className="w-full justify-start text-left pr-12"
-                  onClick={() => onProjectSelect(project)}
-                >
-                  <div className="flex-1 overflow-hidden">
-                    <div className="truncate">{project.name}</div>
-                    {project.description && (
-                      <div className="text-xs text-muted-foreground truncate">
-                        {project.description}
+            <ScrollArea className="flex-shrink-0" style={{ maxHeight: "30vh" }}>
+              <div className="space-y-1">
+                {projects.map((project) => (
+                  <div key={project._id} className="relative group">
+                    <Button
+                      variant={activeProject?._id === project._id ? "secondary" : "ghost"}
+                      className="w-full justify-start text-left pl-2 pr-14"
+                      onClick={() => onProjectSelect(project)}
+                    >
+                      <div className="min-w-0 w-full flex flex-col">
+                        <span className="truncate text-sm">{project.name}</span>
+                        {project.description && (
+                          <span className="text-xs text-muted-foreground truncate">
+                            {project.description}
+                          </span>
+                        )}
                       </div>
-                    )}
+                    </Button>
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+                      {activeProject?._id === project._id && (
+                        <ProjectSettingsButton
+                          project={project}
+                          onSettingsUpdated={onProjectSelect}
+                        />
+                      )}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreVertical className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => onDeleteProject?.(project._id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete Project
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
-                </Button>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                  {activeProject?._id === project._id && (
-                    <ProjectSettingsButton
-                      project={project}
-                      onSettingsUpdated={(updatedProject) => {
-                        onProjectSelect(updatedProject);
-                      }}
-                    />
-                  )}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => onDeleteProject?.(project._id)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete Project
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                ))}
               </div>
-            ))}
+            </ScrollArea>
           </div>
-        </ScrollArea>
-      </div>
 
-      <Separator />
+          <Separator />
 
-      {/* Chats Section */}
-      <div className="flex flex-col gap-2 flex-1">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Chats</h2>
-          <Button 
-            variant="ghost"
-            size="sm"
-            onClick={onNewChat}
-            title="New Chat"
-          >
-            <PlusCircle className="h-4 w-4" />
-          </Button>
+          {/* Chats Section */}
+          <div className="flex flex-col gap-2 flex-1">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Chats</h2>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={onNewChat} 
+                title="New Chat"
+              >
+                <PlusCircle className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <ScrollArea className="flex-1">
+              <div className="space-y-1">
+                {chats.map((chat) => (
+                  <div key={chat.sessionId} className="relative group">
+                    <Button
+                      variant={activeChat === chat.sessionId ? "secondary" : "ghost"}
+                      className="w-full justify-start text-left pl-2 pr-14"
+                      onClick={() => onChatSelect(chat.sessionId)}
+                    >
+                      <MessageSquare className="h-4 w-4 shrink-0 mr-2" />
+                      <div className="min-w-0 w-full flex flex-col">
+                        <span className="truncate text-sm">
+                          {chat.title || "New conversation"}
+                        </span>
+                        <span className="text-xs text-muted-foreground truncate">
+                          {formatDistanceToNow(new Date(chat.updatedAt), { addSuffix: true })}
+                        </span>
+                      </div>
+                    </Button>
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreVertical className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => onDeleteChat?.(chat.sessionId)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete Chat
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
         </div>
 
-        <ScrollArea className="flex-1">
+        <ProjectDialog
+          open={showProjectDialog}
+          onOpenChange={setShowProjectDialog}
+          project={editingProject}
+          onSubmit={(projectData) => {
+            onProjectSubmit(projectData);
+            setShowProjectDialog(false);
+          }}
+        />
+      </div>
+    </aside>
+  );
+}
+```
+
+# frontend/src/components/tasks/CreateTask.jsx
+
+```jsx
+// /frontend/src/components/tasks/CreateTask.jsx
+import React, { useState } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Calendar } from "@/components/ui/calendar";
+import { Label } from "@/components/ui/label"; // Add this import
+
+export function CreateTask({ open, onClose, onCreated }) {
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    type: '',
+    schedule: {
+      frequency: 'once',
+      timeOfDay: '09:00',
+      daysOfWeek: []
+    }
+  });
+
+  const taskTypes = [
+    { value: 'analyze', label: 'Analyze', description: 'Analyze data, code, or text' },
+    { value: 'monitor', label: 'Monitor', description: 'Monitor websites or systems' },
+    { value: 'summarize', label: 'Summarize', description: 'Create content summaries' },
+    { value: 'report', label: 'Report', description: 'Generate reports' },
+    { value: 'alert', label: 'Alert', description: 'Send alerts based on conditions' }
+  ];
+
+  const frequencies = [
+    { value: 'once', label: 'Once' },
+    { value: 'hourly', label: 'Every Hour' },
+    { value: 'daily', label: 'Every Day' },
+    { value: 'weekly', label: 'Every Week' }
+  ];
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch('http://localhost:3000/api/tasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
+      });
+
+      if (response.ok) {
+        onCreated();
+      }
+    } catch (error) {
+      console.error('Error creating task:', error);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>Create New Task</DialogTitle>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            {chats.map((chat) => (
-              <div key={chat.sessionId} className="group relative">
-                <Button
-                  variant={activeChat === chat.sessionId ? "secondary" : "ghost"}
-                  className="w-full justify-start gap-2 text-left overflow-hidden pr-12"
-                  onClick={() => onChatSelect(chat.sessionId)}
-                >
-                  <MessageSquare className="h-4 w-4 flex-shrink-0" />
-                  <div className="flex-1 overflow-hidden">
-                    <div className="truncate">
-                      {chat.title || 'New conversation'}
+            <Label>Task Type</Label>
+            <Select
+              value={formData.type}
+              onValueChange={(value) => setFormData(prev => ({ ...prev, type: value }))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select task type" />
+              </SelectTrigger>
+              <SelectContent>
+                {taskTypes.map(type => (
+                  <SelectItem key={type.value} value={type.value}>
+                    <div>
+                      <div className="font-medium">{type.label}</div>
+                      <div className="text-xs text-muted-foreground">{type.description}</div>
                     </div>
-                    <div className="text-xs text-muted-foreground truncate">
-                      {formatDistanceToNow(new Date(chat.updatedAt), { addSuffix: true })}
-                    </div>
-                  </div>
-                </Button>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => onDeleteChat?.(chat.sessionId)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete Chat
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Title</Label>
+            <Input
+              value={formData.title}
+              onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
+              placeholder="Enter task title"
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Textarea
+              value={formData.description}
+              onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+              placeholder="Describe what this task will do"
+              rows={3}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Schedule</Label>
+            <Select
+              value={formData.schedule.frequency}
+              onValueChange={(value) => 
+                setFormData(prev => ({
+                  ...prev,
+                  schedule: { ...prev.schedule, frequency: value }
+                }))
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select frequency" />
+              </SelectTrigger>
+              <SelectContent>
+                {frequencies.map(freq => (
+                  <SelectItem key={freq.value} value={freq.value}>
+                    {freq.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {formData.schedule.frequency !== 'once' && formData.schedule.frequency !== 'hourly' && (
+            <div className="space-y-2">
+              <Label>Time of Day</Label>
+              <Input
+                type="time"
+                value={formData.schedule.timeOfDay}
+                onChange={(e) => 
+                  setFormData(prev => ({
+                    ...prev,
+                    schedule: { ...prev.schedule, timeOfDay: e.target.value }
+                  }))
+                }
+              />
+            </div>
+          )}
+
+          <div className="pt-4 flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit">Create Task</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/tasks/CreateTaskDialog.jsx
+
+```jsx
+// /frontend/src/components/tasks/CreateTaskDialog.jsx
+import React, { useState, useEffect } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription
+} from "@/components/ui/dialog";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent
+} from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { AlertCircle, Plus, X } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const TASK_TYPES = {
+  github: {
+    name: "GitHub Task",
+    actions: ["createPullRequest", "clone"],
+    requiredCapabilities: ["github_access"],
+    fields: {
+      createPullRequest: [
+        { name: "repoUrl", label: "Repository URL", type: "text" },
+        { name: "prTitle", label: "PR Title", type: "text" },
+        { name: "prBody", label: "PR Description", type: "textarea" },
+        { name: "head", label: "Source Branch", type: "text" },
+        { name: "base", label: "Target Branch", type: "text" }
+      ],
+      clone: [
+        { name: "repoUrl", label: "Repository URL", type: "text" },
+        { name: "branch", label: "Branch (optional)", type: "text" }
+      ]
+    }
+  },
+  filesystem: {
+    name: "Filesystem Task",
+    actions: ["read", "write", "delete"],
+    requiredCapabilities: ["file_access"],
+    fields: {
+      read: [
+        { name: "path", label: "File Path", type: "text" }
+      ],
+      write: [
+        { name: "path", label: "File Path", type: "text" },
+        { name: "content", label: "Content", type: "textarea" }
+      ],
+      delete: [
+        { name: "path", label: "File Path", type: "text" }
+      ]
+    }
+  },
+  command: {
+    name: "Command Task",
+    actions: ["execute"],
+    requiredCapabilities: ["command_execution"],
+    fields: {
+      execute: [
+        { name: "command", label: "Command", type: "text" },
+        { name: "args", label: "Arguments (one per line)", type: "textarea" }
+      ]
+    }
+  },
+  web: {
+    name: "Web Task",
+    actions: ["search", "scrape", "monitor"],
+    requiredCapabilities: ["web_access"],
+    fields: {
+      search: [
+        { name: "query", label: "Search Query", type: "text" },
+        { 
+          name: "engine", 
+          label: "Search Engine", 
+          type: "select",
+          options: [
+            { value: "google", label: "Google" },
+            { value: "duckduckgo", label: "DuckDuckGo" }
+          ]
+        },
+        { 
+          name: "numResults", 
+          label: "Number of Results", 
+          type: "number",
+          defaultValue: 5
+        }
+      ],
+      scrape: [
+        { name: "url", label: "URL to Scrape", type: "text" },
+        { 
+          name: "selectors", 
+          label: "CSS Selectors (JSON)", 
+          type: "code",
+          language: "json",
+          defaultValue: JSON.stringify({
+            title: "h1",
+            content: ".main-content",
+            links: {
+              type: "list",
+              selector: "a"
+            }
+          }, null, 2)
+        }
+      ],
+      monitor: [
+        { name: "url", label: "URL to Monitor", type: "text" },
+        { 
+          name: "checkInterval", 
+          label: "Check Interval (seconds)", 
+          type: "number",
+          defaultValue: 300
+        },
+        { 
+          name: "conditions", 
+          label: "Conditions (JSON)", 
+          type: "code",
+          language: "json",
+          defaultValue: JSON.stringify({
+            price: {
+              selector: ".price",
+              operator: "lessThan",
+              value: "100"
+            },
+            status: {
+              selector: ".status",
+              operator: "equals",
+              value: "In Stock"
+            }
+          }, null, 2)
+        }
+      ]
+    }
+  }
+};
+export function CreateTaskDialog({ open, onOpenChange, onSubmit }) {
+    const [currentTab, setCurrentTab] = useState("basic");
+    const [formData, setFormData] = useState({
+      title: '',
+      description: '',
+      type: 'github',
+      action: '',
+      priority: 3,
+      config: {},
+      schedule: {
+        repeat: false,
+        interval: 3600000 // 1 hour default
+      },
+      timeout: 30000,
+      maxAttempts: 3,
+      tags: []
+    });
+    const [newTag, setNewTag] = useState('');
+    const [validationErrors, setValidationErrors] = useState({});
+    const [availableAgents, setAvailableAgents] = useState([]);
+  
+    useEffect(() => {
+      if (open) {
+        fetchAgents();
+      }
+    }, [open]);
+  
+    const fetchAgents = async () => {
+      try {
+        const response = await fetch('http://localhost:3000/api/agents');
+        if (response.ok) {
+          const agents = await response.json();
+          setAvailableAgents(agents.filter(agent => agent.status === 'available'));
+        }
+      } catch (error) {
+        console.error('Error fetching agents:', error);
+      }
+    };
+  
+    const updateFormData = (field, value) => {
+      setFormData(prev => ({
+        ...prev,
+        [field]: value
+      }));
+      // Clear validation error when field is updated
+      if (validationErrors[field]) {
+        setValidationErrors(prev => {
+          const updated = { ...prev };
+          delete updated[field];
+          return updated;
+        });
+      }
+    };
+  
+    const validateForm = () => {
+      const errors = {};
+      
+      // Basic validation
+      if (!formData.title.trim()) {
+        errors.title = 'Title is required';
+      }
+      if (!formData.type) {
+        errors.type = 'Task type is required';
+      }
+      if (!formData.action) {
+        errors.action = 'Action is required';
+      }
+  
+      // Validate required fields based on task type and action
+      const taskType = TASK_TYPES[formData.type];
+      if (taskType && formData.action) {
+        const fields = taskType.fields[formData.action];
+        fields?.forEach(field => {
+          if (field.required && !formData.config[field.name]) {
+            errors[`config.${field.name}`] = `${field.label} is required`;
+          }
+        });
+      }
+  
+      // Schedule validation
+      if (formData.schedule.repeat && formData.schedule.interval < 60000) {
+        errors['schedule.interval'] = 'Interval must be at least 1 minute';
+      }
+  
+      setValidationErrors(errors);
+      return Object.keys(errors).length === 0;
+    };
+  
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        
+        if (!validateForm()) {
+          return;
+        }
+      
+        const taskData = {
+          title: formData.title || `${TASK_TYPES[formData.type].name}: ${formData.action}`,
+          description: formData.description,
+          type: formData.type,
+          priority: formData.priority,
+          requiredCapabilities: TASK_TYPES[formData.type].requiredCapabilities,
+          requiredResources: [{
+            type: formData.type,
+            permissions: getRequiredPermissions(formData.type, formData.action)
+          }],
+          config: {
+            type: formData.type,
+            action: formData.action,
+            ...formData.config
+          },
+          schedule: formData.schedule.repeat ? {
+            repeat: true,
+            interval: formData.schedule.interval,
+            nextRun: new Date(Date.now() + formData.schedule.interval)
+          } : undefined,
+          timeout: formData.timeout,
+          maxAttempts: formData.maxAttempts,
+          tags: formData.tags
+        };
+      
+        console.log('Submitting task:', taskData); // Debug log
+        onSubmit(taskData);
+      };
+  
+    const getRequiredPermissions = (type, action) => {
+      switch (type) {
+        case 'github':
+          return action === 'createPullRequest' ? ['write'] : ['read'];
+        case 'filesystem':
+          return action === 'read' ? ['read'] : ['write'];
+        case 'command':
+          return ['execute'];
+        case 'web':
+          return ['read'];
+        default:
+          return [];
+      }
+    };
+  
+    const addTag = () => {
+      if (newTag.trim() && !formData.tags.includes(newTag.trim())) {
+        updateFormData('tags', [...formData.tags, newTag.trim()]);
+        setNewTag('');
+      }
+    };
+  
+    const removeTag = (tagToRemove) => {
+      updateFormData('tags', formData.tags.filter(tag => tag !== tagToRemove));
+    };
+
+    const renderField = (field, configData, onChange) => {
+        switch (field.type) {
+          case 'text':
+            return (
+              <Input
+                value={configData[field.name] || ''}
+                onChange={(e) => onChange(field.name, e.target.value)}
+                placeholder={field.placeholder || field.label}
+                required={field.required}
+              />
+            );
+      
+          case 'textarea':
+            return (
+              <Textarea
+                value={configData[field.name] || ''}
+                onChange={(e) => onChange(field.name, e.target.value)}
+                placeholder={field.placeholder || field.label}
+                required={field.required}
+                rows={4}
+              />
+            );
+      
+          case 'select':
+            return (
+              <Select
+                value={configData[field.name] || field.defaultValue}
+                onValueChange={(value) => onChange(field.name, value)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {field.options.map(option => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+      
+          case 'number':
+            return (
+              <Input
+                type="number"
+                value={configData[field.name] || field.defaultValue || ''}
+                onChange={(e) => onChange(field.name, parseInt(e.target.value))}
+                min={field.min}
+                max={field.max}
+                required={field.required}
+              />
+            );
+      
+          case 'code':
+            return (
+              <div className="relative">
+                <Textarea
+                  value={
+                    typeof configData[field.name] === 'object'
+                      ? JSON.stringify(configData[field.name], null, 2)
+                      : configData[field.name] || JSON.stringify(field.defaultValue || {}, null, 2)
+                  }
+                  onChange={(e) => {
+                    try {
+                      const parsed = JSON.parse(e.target.value);
+                      onChange(field.name, parsed);
+                    } catch (error) {
+                      // Allow invalid JSON while typing
+                      onChange(field.name, e.target.value);
+                    }
+                  }}
+                  className="font-mono text-sm"
+                  rows={8}
+                />
+                <div className="absolute top-2 right-2 text-xs text-muted-foreground">
+                  {field.language}
                 </div>
+                {field.description && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {field.description}
+                  </p>
+                )}
+              </div>
+            );
+      
+          default:
+            return (
+              <Input
+                value={configData[field.name] || ''}
+                onChange={(e) => onChange(field.name, e.target.value)}
+                placeholder={field.placeholder || field.label}
+              />
+            );
+        }
+      };
+  
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create New Task</DialogTitle>
+            <DialogDescription>
+              Configure your task settings and schedule
+            </DialogDescription>
+          </DialogHeader>
+  
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <Tabs value={currentTab} onValueChange={setCurrentTab}>
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="basic">Basic Info</TabsTrigger>
+                <TabsTrigger value="config">Configuration</TabsTrigger>
+                <TabsTrigger value="schedule">Schedule</TabsTrigger>
+                <TabsTrigger value="advanced">Advanced</TabsTrigger>
+              </TabsList>
+  
+              {/* Basic Info Tab */}
+              {/* I'll continue with each tab's content in subsequent messages */}
+  {/* Basic Info Tab */}
+  <TabsContent value="basic" className="space-y-4">
+    <div className="grid gap-4">
+      <div>
+        <Label>Title</Label>
+        <Input
+          value={formData.title}
+          onChange={(e) => updateFormData('title', e.target.value)}
+          placeholder="Enter task title"
+        />
+        {validationErrors.title && (
+          <p className="text-sm text-destructive mt-1">{validationErrors.title}</p>
+        )}
+      </div>
+  
+      <div>
+        <Label>Description</Label>
+        <Textarea
+          value={formData.description}
+          onChange={(e) => updateFormData('description', e.target.value)}
+          placeholder="Describe the task"
+        />
+      </div>
+  
+      <div>
+        <Label>Priority</Label>
+        <Select
+          value={formData.priority.toString()}
+          onValueChange={(value) => updateFormData('priority', parseInt(value))}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="1">Low</SelectItem>
+            <SelectItem value="2">Medium-Low</SelectItem>
+            <SelectItem value="3">Medium</SelectItem>
+            <SelectItem value="4">Medium-High</SelectItem>
+            <SelectItem value="5">High</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+  
+      <div>
+        <Label>Tags</Label>
+        <div className="flex gap-2 mb-2">
+          <Input
+            value={newTag}
+            onChange={(e) => setNewTag(e.target.value)}
+            placeholder="Add a tag"
+            onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+          />
+          <Button type="button" onClick={addTag}>Add</Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {formData.tags.map(tag => (
+            <Badge 
+              key={tag}
+              variant="secondary"
+              className="cursor-pointer"
+              onClick={() => removeTag(tag)}
+            >
+              {tag} ×
+            </Badge>
+          ))}
+        </div>
+      </div>
+    </div>
+  </TabsContent>
+  
+  {/* Configuration Tab */}
+  <TabsContent value="config" className="space-y-4">
+    <div className="grid gap-4">
+      <div>
+        <Label>Task Type</Label>
+        <Select
+          value={formData.type}
+          onValueChange={(value) => {
+            updateFormData('type', value);
+            updateFormData('action', '');
+            updateFormData('config', {});
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(TASK_TYPES).map(([type, config]) => (
+              <SelectItem key={type} value={type}>
+                <div className="flex flex-col">
+                  <span>{config.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {config.requiredCapabilities.join(', ')}
+                  </span>
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+  
+      {formData.type && (
+        <div>
+          <Label>Action</Label>
+          <Select
+            value={formData.action}
+            onValueChange={(value) => {
+              updateFormData('action', value);
+              updateFormData('config', {});
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TASK_TYPES[formData.type].actions.map(action => (
+                <SelectItem key={action} value={action}>
+                  {action.split(/(?=[A-Z])/).join(' ')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+  
+      {formData.type && formData.action && (
+        <div className="border rounded-lg p-4 space-y-4 bg-muted/50">
+          {TASK_TYPES[formData.type].fields[formData.action].map(field => (
+            <div key={field.name}>
+              <Label>{field.label}</Label>
+              {renderField(field, formData.config, (name, value) => {
+                updateFormData('config', {
+                  ...formData.config,
+                  [name]: value
+                });
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  </TabsContent>
+  
+  {/* Schedule Tab */}
+  <TabsContent value="schedule" className="space-y-4">
+    <div className="grid gap-4">
+      <div className="flex items-center space-x-2">
+        <Checkbox
+          id="repeat"
+          checked={formData.schedule.repeat}
+          onCheckedChange={(checked) => {
+            updateFormData('schedule', {
+              ...formData.schedule,
+              repeat: checked
+            });
+          }}
+        />
+        <Label htmlFor="repeat">Repeat Task</Label>
+      </div>
+  
+      {formData.schedule.repeat && (
+        <div>
+          <Label>Interval (minutes)</Label>
+          <Input
+            type="number"
+            min="1"
+            value={formData.schedule.interval / 60000}
+            onChange={(e) => {
+              updateFormData('schedule', {
+                ...formData.schedule,
+                interval: parseInt(e.target.value) * 60000
+              });
+            }}
+          />
+          {validationErrors['schedule.interval'] && (
+            <p className="text-sm text-destructive mt-1">
+              {validationErrors['schedule.interval']}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  </TabsContent>
+  
+  {/* Advanced Tab */}
+  <TabsContent value="advanced" className="space-y-4">
+    <div className="grid gap-4">
+      <div>
+        <Label>Timeout (seconds)</Label>
+        <Input
+          type="number"
+          min="1"
+          value={formData.timeout / 1000}
+          onChange={(e) => {
+            updateFormData('timeout', parseInt(e.target.value) * 1000);
+          }}
+        />
+      </div>
+  
+      <div>
+        <Label>Maximum Attempts</Label>
+        <Input
+          type="number"
+          min="1"
+          max="10"
+          value={formData.maxAttempts}
+          onChange={(e) => {
+            updateFormData('maxAttempts', parseInt(e.target.value));
+          }}
+        />
+      </div>
+  
+      {availableAgents.length > 0 && (
+        <div>
+          <Label>Available Agents</Label>
+          <div className="mt-2 space-y-2">
+            {availableAgents.map(agent => (
+              <div key={agent._id} className="flex items-center justify-between p-2 border rounded">
+                <div>
+                  <span className="font-medium">{agent.name}</span>
+                  <div className="text-sm text-muted-foreground">
+                    Capabilities: {agent.capabilities.join(', ')}
+                  </div>
+                </div>
+                <Badge variant="secondary">
+                  {agent.status}
+                </Badge>
               </div>
             ))}
           </div>
-        </ScrollArea>
+        </div>
+      )}
+    </div>
+  </TabsContent>
+            </Tabs>
+  
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button type="submit">Create Task</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+```
+
+# frontend/src/components/tasks/TaskAssignmentDialog.jsx
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { toast } from "@/hooks/use-toast";
+
+export function TaskAssignmentDialog({ open, onClose, onSubmit }) {
+  const [agents, setAgents] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    agentId: '',
+    priority: '3',
+    timeout: 30000,
+    maxAttempts: 3
+  });
+
+  // Fetch available agents when dialog opens
+  useEffect(() => {
+    if (open) {
+      fetchAgents();
+    }
+  }, [open]);
+
+  const fetchAgents = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/agents');
+      if (response.ok) {
+        const data = await response.json();
+        // Only show available agents
+        setAgents(data.filter(agent => agent.status === 'available'));
+      }
+    } catch (error) {
+      console.error('Error fetching agents:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load available agents",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      // Prepare the task data
+      const taskData = {
+        ...formData,
+        priority: parseInt(formData.priority),
+        status: 'pending',
+        type: 'command', // Default type - could be made selectable
+        config: {
+          type: 'command',
+          action: 'execute',
+          command: formData.title
+        }
+      };
+
+      const response = await fetch('http://localhost:3000/api/tasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(taskData),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create task');
+      }
+
+      const data = await response.json();
+      toast({
+        title: "Success",
+        description: "Task created and assigned successfully",
+      });
+      
+      onSubmit?.(data);
+      onClose();
+    } catch (error) {
+      console.error('Error creating task:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create and assign task",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Create and Assign Task</DialogTitle>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="space-y-4">
+            {/* Task Title */}
+            <div>
+              <Label htmlFor="title">Task Title</Label>
+              <Input
+                id="title"
+                value={formData.title}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  title: e.target.value
+                }))}
+                placeholder="Enter task title"
+                required
+              />
+            </div>
+
+            {/* Task Description */}
+            <div>
+              <Label htmlFor="description">Description</Label>
+              <Textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  description: e.target.value
+                }))}
+                placeholder="Describe the task"
+                rows={3}
+              />
+            </div>
+
+            {/* Agent Selection */}
+            <div>
+              <Label htmlFor="agent">Select Agent</Label>
+              <Select
+                value={formData.agentId}
+                onValueChange={(value) => setFormData(prev => ({
+                  ...prev,
+                  agentId: value
+                }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an agent" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {agents.map(agent => (
+                      <SelectItem key={agent._id} value={agent._id}>
+                        {agent.name} - {agent.type}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Priority Selection */}
+            <div>
+              <Label htmlFor="priority">Priority</Label>
+              <Select
+                value={formData.priority}
+                onValueChange={(value) => setFormData(prev => ({
+                  ...prev,
+                  priority: value
+                }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select priority" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">Low</SelectItem>
+                  <SelectItem value="2">Medium-Low</SelectItem>
+                  <SelectItem value="3">Medium</SelectItem>
+                  <SelectItem value="4">Medium-High</SelectItem>
+                  <SelectItem value="5">High</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Advanced Settings */}
+            <div className="space-y-4 rounded-lg border p-4">
+              <h4 className="text-sm font-medium">Advanced Settings</h4>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="timeout">Timeout (seconds)</Label>
+                  <Input
+                    id="timeout"
+                    type="number"
+                    min="1"
+                    value={formData.timeout / 1000}
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
+                      timeout: parseInt(e.target.value) * 1000
+                    }))}
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="maxAttempts">Max Attempts</Label>
+                  <Input
+                    id="maxAttempts"
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={formData.maxAttempts}
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
+                      maxAttempts: parseInt(e.target.value)
+                    }))}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={onClose}
+              disabled={loading}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={loading}>
+              {loading ? "Creating..." : "Create Task"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+# frontend/src/components/tasks/TaskDashboard.jsx
+
+```jsx
+// /frontend/src/components/tasks/TaskDashboard.jsx
+import React, { useState, useEffect } from 'react';
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Plus, Calendar, RefreshCw } from "lucide-react";
+import { CreateTask } from './CreateTask';
+
+export function TaskDashboard() {
+  const [tasks, setTasks] = useState([]);
+  const [showCreateTask, setShowCreateTask] = useState(false);
+
+  useEffect(() => {
+    fetchTasks();
+  }, []);
+
+  const fetchTasks = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/tasks');
+      if (response.ok) {
+        const data = await response.json();
+        setTasks(data);
+      }
+    } catch (error) {
+      console.error('Error fetching tasks:', error);
+    }
+  };
+
+  // Helper function to format date
+  const formatDate = (date) => {
+    return new Date(date).toLocaleString();
+  };
+
+  // Helper function to get status badge color
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100';
+      case 'failed':
+        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100';
+      case 'running':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100';
+      default:
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-100';
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold">Tasks</h1>
+          <p className="text-muted-foreground">Schedule and monitor automated tasks</p>
+        </div>
+        <Button onClick={() => setShowCreateTask(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Task
+        </Button>
       </div>
 
-      <ProjectDialog
-        open={showProjectDialog}
-        onOpenChange={setShowProjectDialog}
-        project={editingProject}
-        onSubmit={(projectData) => {
-          onProjectSubmit(projectData);
-          setShowProjectDialog(false);
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {tasks.map(task => (
+          <Card key={task._id} className="p-4 hover:border-primary transition-colors">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="font-medium">{task.title}</h3>
+                <p className="text-sm text-muted-foreground">{task.type}</p>
+              </div>
+              <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(task.status)}`}>
+                {task.status}
+              </span>
+            </div>
+            
+            <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
+              {task.description}
+            </p>
+
+            {task.schedule?.frequency !== 'once' && (
+              <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                <Calendar className="h-3 w-3" />
+                {task.schedule.frequency}
+              </div>
+            )}
+
+            {task.lastRun && (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Last run: {formatDate(task.lastRun)}
+              </div>
+            )}
+            {task.nextRun && (
+              <div className="text-xs text-muted-foreground">
+                Next run: {formatDate(task.nextRun)}
+              </div>
+            )}
+          </Card>
+        ))}
+
+        {tasks.length === 0 && (
+          <div className="col-span-full text-center py-12 text-muted-foreground">
+            No tasks yet. Create one to get started.
+          </div>
+        )}
+      </div>
+
+      {showCreateTask && (
+        <CreateTask 
+          open={showCreateTask} 
+          onClose={() => setShowCreateTask(false)}
+          onCreated={() => {
+            fetchTasks();
+            setShowCreateTask(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+# frontend/src/components/tasks/TaskMonitor.jsx
+
+```jsx
+// /frontend/src/components/tasks/TaskMonitor.jsx
+import React, { useState, useEffect } from "react";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Plus, RefreshCw, AlertCircle } from "lucide-react";
+import { CreateTaskDialog } from "./CreateTaskDialog";
+import { formatDistanceToNow } from "date-fns";
+import { TaskAssignmentDialog } from "./TaskAssignmentDialog";
+
+const STATUS_COLORS = {
+  pending: "bg-yellow-500",
+  assigned: "bg-blue-500",
+  running: "bg-purple-500",
+  completed: "bg-green-500",
+  failed: "bg-red-500",
+};
+
+export function TaskMonitor() {
+  const [tasks, setTasks] = useState([]);
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [isAssigning, setIsAssigning] = useState(false);
+
+  useEffect(() => {
+    fetchTasks();
+    // Poll for updates every 5 seconds
+    const interval = setInterval(fetchTasks, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchTasks = async () => {
+    try {
+      const response = await fetch("http://localhost:3000/api/tasks");
+      if (!response.ok) throw new Error("Failed to fetch tasks");
+      const data = await response.json();
+      setTasks(data);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+      setError(error.message);
+      setLoading(false);
+    }
+  };
+
+  const handleCreateTask = async (taskData) => {
+    try {
+      const response = await fetch("http://localhost:3000/api/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(taskData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create task");
+      }
+
+      await fetchTasks();
+      setIsCreating(false);
+    } catch (error) {
+      console.error("Error creating task:", error);
+      // Add error state handling here
+      setError(error.message);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-3 gap-4 p-4">
+      {/* Task List */}
+      <div className="col-span-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <div>
+              <CardTitle>Tasks</CardTitle>
+              <CardDescription>Monitor and manage agent tasks</CardDescription>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={() => setIsAssigning(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create Task
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[calc(100vh-16rem)]">
+              {tasks.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No tasks found. Create one to get started.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {tasks.map((task) => (
+                    <Card
+                      key={task._id}
+                      className={`hover:bg-accent cursor-pointer ${
+                        selectedTask?._id === task._id ? "border-primary" : ""
+                      }`}
+                      onClick={() => setSelectedTask(task)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div
+                              className={`w-2 h-2 rounded-full ${STATUS_COLORS[task.status]}`}
+                            />
+                            <div>
+                              <h3 className="font-medium">{task.title}</h3>
+                              <p className="text-sm text-muted-foreground">
+                                {task.description}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary">
+                              Priority {task.priority}
+                            </Badge>
+                            <Badge>{task.status}</Badge>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex gap-2 text-xs text-muted-foreground">
+                          <span>
+                            Created{" "}
+                            {formatDistanceToNow(new Date(task.createdAt), {
+                              addSuffix: true,
+                            })}
+                          </span>
+                          {task.completedAt && (
+                            <span>
+                              • Completed{" "}
+                              {formatDistanceToNow(new Date(task.completedAt), {
+                                addSuffix: true,
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Task Details */}
+      <div className="space-y-4">
+        {selectedTask ? (
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>Task Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <h4 className="text-sm font-medium">Status</h4>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div
+                      className={`w-2 h-2 rounded-full ${STATUS_COLORS[selectedTask.status]}`}
+                    />
+                    <span className="capitalize">{selectedTask.status}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-medium">Required Capabilities</h4>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {selectedTask.requiredCapabilities.map((cap) => (
+                      <Badge key={cap} variant="secondary">
+                        {cap}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-medium">Required Resources</h4>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {selectedTask.requiredResources.map((resource) => (
+                      <Badge key={resource.type} variant="outline">
+                        {resource.type}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+
+                {selectedTask.error && (
+                  <div className="bg-destructive/10 text-destructive p-3 rounded-md">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4" />
+                      <span className="font-medium">Error</span>
+                    </div>
+                    <p className="mt-1 text-sm">{selectedTask.error.message}</p>
+                  </div>
+                )}
+
+                {selectedTask.result && (
+                  <div>
+                    <h4 className="text-sm font-medium">Result</h4>
+                    <pre className="mt-1 p-2 bg-muted rounded-md text-xs overflow-auto">
+                      {JSON.stringify(selectedTask.result, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {selectedTask.assignedTo && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Assigned Agent</CardTitle>
+                </CardHeader>
+                <CardContent>{/* Add agent details here */}</CardContent>
+              </Card>
+            )}
+          </>
+        ) : (
+          <Card>
+            <CardContent className="p-8 text-center text-muted-foreground">
+              Select a task to view details
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      <CreateTaskDialog
+        open={isCreating}
+        onOpenChange={setIsCreating}
+        onSubmit={handleCreateTask}
+      />
+      <TaskAssignmentDialog
+        open={isAssigning}
+        onClose={() => setIsAssigning(false)}
+        onSubmit={() => {
+          setIsAssigning(false);
+          fetchTasks(); // Refresh the task list
         }}
       />
     </div>
   );
 }
+
 ```
 
 # frontend/src/components/ui/accordion.jsx
@@ -8098,6 +13427,27 @@ export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider }
 
 ```
 
+# frontend/src/context/AppContext.js
+
+```js
+// src/context/AppContext.js
+import React, { createContext, useState } from 'react';
+
+export const AppContext = createContext();
+
+export const AppProvider = ({ children }) => {
+  const [projects, setProjects] = useState([]);
+  const [chats, setChats] = useState([]);
+
+  return (
+    <AppContext.Provider value={{ projects, setProjects, chats, setChats }}>
+      {children}
+    </AppContext.Provider>
+  );
+};
+
+```
+
 # frontend/src/hooks/use-mobile.jsx
 
 ```jsx
@@ -8598,6 +13948,10 @@ export default defineConfig({
 })
 ```
 
+# images/screenshot1.png
+
+This is a binary file of the type: Image
+
 # LICENSE
 
 ```
@@ -8623,5 +13977,228 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+```
+
+# README.md
+
+```md
+# LocalGPT Chat UI
+
+A modern chat interface for Ollama, featuring a clean UI with project management capabilities, dark mode support, and markdown rendering.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![React](https://img.shields.io/badge/React-18.2-blue.svg)](https://reactjs.org/)
+[![Vite](https://img.shields.io/badge/Vite-5.0-646CFF.svg)](https://vitejs.dev/)
+[![Node](https://img.shields.io/badge/Node-20.x-339933.svg)](https://nodejs.org/)
+[![Ollama](https://img.shields.io/badge/Ollama-0.1.29-black.svg)](https://ollama.ai/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-8.9-47A248.svg)](https://www.mongodb.com/)
+[![DeepSeek Coder](https://img.shields.io/badge/DeepSeek%20Coder-6.7B-FF6B6B.svg)](https://github.com/deepseek-ai/DeepSeek-Coder)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+[![Contributors](https://img.shields.io/github/contributors/mrlynn/deepseek-chat.svg)](https://github.com/mrlynn/localgpt/graphs/contributors)
+[![Last Commit](https://img.shields.io/github/last-commit/mrlynn/localgpt.svg)](https://github.com/mrlynn/localgpt/commits/main)
+
+## Screenshot
+
+![Screenshot showing the chat interface](images/screenshot1.png)
+
+## Features
+
+- 🤖 Full integration with Ollama
+- 💬 Clean, modern chat interface
+- 📁 Project management with custom configurations
+- 🌓 Dark mode support
+- ✨ Markdown and code syntax highlighting
+- 📊 Context-aware chat history
+- 🎨 Customizable chat styles and preferences
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+- [Node.js](https://nodejs.org/) (v16 or newer)
+- [npm](https://www.npmjs.com/) or [yarn](https://yarnpkg.com/)
+- [Ollama](https://ollama.ai)
+
+### Installing Ollama
+
+1. **macOS / Linux**:
+   \`\`\`bash
+   curl -fsSL https://ollama.ai/install.sh | sh
+   \`\`\`
+
+2. **Windows**:
+   - Download the installer from [Ollama's Windows installation page](https://ollama.ai/download/windows)
+   - Follow the installation wizard
+
+3. **Verify Installation**:
+   \`\`\`bash
+   ollama --version
+   \`\`\`
+
+### Setting up Ollama
+
+1. Start the Ollama service:
+   \`\`\`bash
+   ollama serve
+   \`\`\`
+
+2. Pull the DeepSeek Coder model:
+   \`\`\`bash
+   ollama pull deepseek-coder:6.7b
+   \`\`\`
+   This may take several minutes depending on your internet connection.
+
+## Installation
+
+1. Clone the repository:
+   \`\`\`bash
+   git clone https://github.com/yourusername/deepseek-chat.git
+   cd deepseek-chat
+   \`\`\`
+
+2. Install dependencies for both frontend and backend:
+   \`\`\`bash
+   # Install backend dependencies
+   cd backend
+   npm install
+
+   # Install frontend dependencies
+   cd ../frontend
+   npm install
+   \`\`\`
+
+3. Create a `.env` file in the backend directory:
+   \`\`\`bash
+   # backend/.env
+   PORT=3000
+   OLLAMA_HOST=http://localhost:11434
+   MODEL_NAME=deepseek-coder:6.7b
+   MONGODB_URI=mongodb://localhost:27017/deepseek-chat
+   MONGODB_DB_NAME=deepseek-chat
+   \`\`\`
+
+4. Set up MongoDB:
+   - Install MongoDB locally or use MongoDB Atlas
+   - Update the `MONGODB_URI` in your `.env` file accordingly
+
+## Running the Application
+
+1. Start the backend server:
+   \`\`\`bash
+   cd backend
+   npm run dev
+   \`\`\`
+
+2. In a new terminal, start the frontend:
+   \`\`\`bash
+   cd frontend
+   npm run dev
+   \`\`\`
+
+3. Open your browser and navigate to:
+   \`\`\`
+   http://localhost:5173
+   \`\`\`
+
+## Project Structure
+
+\`\`\`
+.
+├── backend/                 # Backend server
+│   ├── models/             # MongoDB models
+│   ├── services/           # Business logic
+│   ├── server.js          # Express server setup
+│   └── package.json       # Backend dependencies
+│
+└── frontend/               # React frontend
+    ├── src/
+    │   ├── components/    # React components
+    │   ├── hooks/        # Custom React hooks
+    │   └── lib/          # Utility functions
+    └── package.json      # Frontend dependencies
+\`\`\`
+
+## Using Projects
+
+Projects help organize your conversations and maintain context:
+
+1. **Creating a Project**:
+   - Click the "New Project" button in the sidebar
+   - Enter project name and description
+   - Configure project settings:
+     - Communication style
+     - Technical level
+     - Code style preferences
+     - Context settings
+
+2. **Project Settings**:
+   - Style: Define tone and technical level
+   - Context: Control conversation context
+   - Knowledge Base: Add terminology and code examples
+   - Requirements: Set mandatory elements and technologies
+   - Output: Configure response format
+
+3. **Managing Conversations**:
+   - Each project maintains its own chat history
+   - Conversations inherit project settings
+   - Switch between projects using the sidebar
+
+## Features in Detail
+
+### Chat Interface
+
+- **Code Highlighting**: Supports multiple programming languages
+- **Markdown Rendering**: Rich text formatting
+- **Message Actions**: Copy, regenerate, and delete messages
+- **Context Awareness**: Maintains conversation flow
+
+### Project Management
+
+- **Custom Configurations**: Per-project settings
+- **Context Control**: Define how much context to maintain
+- **Style Settings**: Customize interaction style
+- **Knowledge Base**: Store project-specific information
+
+### Environmental Settings
+
+- **Dark Mode**: Toggle between light and dark themes
+- **Model Selection**: Choose different Ollama models
+- **Connection Status**: Monitor Ollama connectivity
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Ollama Connection Failed**:
+   - Ensure Ollama is running (`ollama serve`)
+   - Check OLLAMA_HOST in `.env`
+   - Verify no firewall blocking
+
+2. **MongoDB Connection Issues**:
+   - Verify MongoDB is running
+   - Check MONGODB_URI in `.env`
+   - Ensure database permissions
+
+3. **Model Loading Failed**:
+   - Re-pull the model: `ollama pull deepseek-coder:6.7b`
+   - Check available disk space
+   - Verify model name in `.env`
+
+### Getting Help
+
+1. Check the [Issues](https://github.com/yourusername/deepseek-chat/issues) page
+2. Review Ollama's [documentation](https://ollama.ai/docs)
+3. Join our [Discord community](https://discord.gg/yourdiscord)
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 ```
 

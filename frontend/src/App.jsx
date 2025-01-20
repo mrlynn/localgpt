@@ -10,6 +10,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ProjectDialog } from "./components/projects/ProjectDialog";
 import { Menu } from "./components/Menu";
 import { ModelSelector } from "./components/ModelSelector";
+import { FileUpload } from "@/components/ui/file-upload"
 
 import {
   Dialog,
@@ -37,6 +38,7 @@ import {
   Moon,
   Sun,
   FolderPlus,
+  Paperclip
 } from "lucide-react";
 import EnvironmentCheck from "./components/EnvironmentCheck";
 
@@ -56,6 +58,7 @@ function App() {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const [editingProject, setEditingProject] = useState(null);
+  const [chatFiles, setChatFiles] = useState([]);
 
   // Load projects
   useEffect(() => {
@@ -194,22 +197,29 @@ function App() {
     const userMessage = input.trim();
     setInput("");
 
+    const formData = new FormData();
+    formData.append("message", input.trim());
+    chatFiles.forEach((file) => {
+      formData.append("files", file);
+    });
+
     try {
       // Add user message immediately
-      setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-
-      const response = await fetch("http://localhost:3000/api/chat", {
-        method: "POST",
+      setMessages(prev => [...prev, { 
+        role: "user", 
+        content: input.trim(),
+        files: chatFiles.map(f => f.name)
+      }])
+      setInput('')
+      setChatFiles([])
+      const response = await fetch('http://localhost:3000/api/chat', {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
-          "X-Session-ID": activeChat || "",
-          ...(activeProject && { "X-Project-ID": activeProject._id }),
+          'X-Session-ID': activeChat || '',
+          ...(activeProject && { 'X-Project-ID': activeProject._id })
         },
-        body: JSON.stringify({ 
-          message: userMessage,
-          model: selectedModel 
-        }),
-      });
+        body: formData
+      })
 
       if (!response.ok) {
         throw new Error("Failed to get response");
@@ -433,7 +443,7 @@ function App() {
             <div className="flex items-center gap-4">
               <Menu onNewChat={handleNewChat} />
               <ModelSelector onModelChange={setSelectedModel} />
-              </div>
+            </div>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -477,20 +487,20 @@ function App() {
         <div className="flex-1 overflow-hidden">
           <Card className="h-full border-0">
             <ScrollArea className="h-[calc(100vh-200px)]">
-              <div className="flex flex-col gap-4 p-4">
+              <div className="flex flex-col gap-6 p-4 max-w-[900px] mx-auto">
                 {messages.map((message, index) => (
                   <div
                     key={index}
-                    className={`flex gap-2 ${
+                    className={`flex gap-4 ${
                       message.role === "assistant"
                         ? "justify-start"
                         : "justify-end"
                     }`}
                   >
                     {message.role === "assistant" && (
-                      <div className="relative flex flex-col w-full max-w-[85%] gap-2">
+                      <div className="flex flex-col w-full gap-2">
                         <div className="flex items-start gap-2 group">
-                          <div className="bg-muted rounded-lg p-3">
+                          <div className="bg-background border rounded-lg p-4 max-w-full overflow-hidden">
                             <ChatMessage
                               message={message.content}
                               isDarkMode={isDarkMode}
@@ -503,17 +513,19 @@ function App() {
                             onClick={() => copyMessage(message.content)}
                           >
                             {copySuccess === message.content ? (
-                              <CheckCircle2 className="w-4 h-4" />
+                              <CheckCircle2 className="h-4 w-4" />
                             ) : (
-                              <Copy className="w-4 h-4" />
+                              <Copy className="h-4 w-4" />
                             )}
                           </Button>
                         </div>
                       </div>
                     )}
                     {message.role === "user" && (
-                      <div className="bg-primary text-primary-foreground rounded-lg p-3 max-w-[85%]">
-                        {message.content}
+                      <div className="bg-primary text-primary-foreground rounded-lg p-4 max-w-[85%] break-words">
+                        <div className="prose dark:prose-invert prose-sm max-w-none">
+                          {message.content}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -525,41 +537,75 @@ function App() {
         </div>
 
         <div className="p-4 border-t">
-          <div className="flex gap-2">
-            <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled={messages.length === 0}
-                onClick={clearChat}
-              >
-                <Trash2 className="w-4 h-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled={messages.length === 0}
-                onClick={regenerateLastResponse}
-              >
-                <RotateCcw className="w-4 h-4" />
-              </Button>
-            </div>
-            <form onSubmit={handleSubmit} className="flex flex-1 gap-2">
-              <Input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a message..."
-                disabled={isLoading}
-                className="flex-1"
-              />
-              <Button type="submit" disabled={isLoading}>
-                <Send className="w-4 h-4 mr-2" />
-                Send
-              </Button>
-            </form>
+  <div className="flex flex-col gap-2">
+    {chatFiles.length > 0 && (
+      <div className="flex flex-wrap gap-2 p-2 bg-muted/50 rounded-lg">
+        {chatFiles.map(file => (
+          <div 
+            key={file.name}
+            className="flex items-center gap-2 p-1.5 pl-3 rounded-md bg-background border text-sm"
+          >
+            <File className="h-4 w-4 text-muted-foreground" />
+            <span className="truncate max-w-[200px]">{file.name}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setChatFiles(prev => prev.filter(f => f !== file))}
+              className="h-6 w-6 p-0 ml-1 hover:bg-muted"
+            >
+              <X className="h-3 w-3" />
+            </Button>
           </div>
+        ))}
+      </div>
+    )}
+    
+    <form onSubmit={handleSubmit} className="flex gap-2">
+      <div className="flex-1 relative flex items-center gap-2">
+        <Input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Type a message..."
+          disabled={isLoading}
+          className="flex-1"
+        />
+        <div className="flex-shrink-0">
+          <input
+            type="file"
+            id="file-upload"
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files || []);
+              setChatFiles(prev => [...prev, ...files]);
+              e.target.value = ''; // Reset input
+            }}
+            multiple
+            accept=".txt,.md,.csv,.json,.pdf,.xlsx,.xls"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => document.getElementById('file-upload').click()}
+            className="h-full aspect-square"
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
         </div>
+        <Button 
+          type="submit" 
+          disabled={isLoading || (!input.trim() && chatFiles.length === 0)}
+          className="flex-shrink-0"
+        >
+          <Send className="h-4 w-4 mr-2" />
+          Send
+        </Button>
+      </div>
+    </form>
+  </div>
+</div>
       </main>
     </div>
   );
